@@ -14,19 +14,24 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const page = (p) => path.join(here, 'pages', p);
 const lenient = !!(process.env.CI || process.env.GPU_BROWSER_TEST_LENIENT);
 
-// Browser processes we launched carry --user-data-dir=<tmp>/gpu-browser-XXXX on their command line.
-function pidList() {
+// Only processes this test started are checked: the browsers are direct children of the server
+// under test. (Other gpu-browser users on the machine, e.g. a live Claude Code session, are ignored.)
+function childPids(pid) {
   try {
     const out = process.platform === 'win32'
-      ? execSync(`powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*user-data-dir=*gpu-browser-*' } | Select-Object -ExpandProperty ProcessId"`)
-      : execSync(`pgrep -f "user-data-dir=.*gpu-browser-" || true`);
-    return out.toString().split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+      ? execSync(`powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter 'ParentProcessId=${pid}' | Select-Object -ExpandProperty ProcessId"`)
+      : execSync(`pgrep -P ${pid} || true`);
+    return out.toString().split(/\r?\n/).map((x) => Number(x.trim())).filter(Boolean);
   } catch { return []; }
 }
-// Snapshot what already exists so concurrent gpu-browser runs elsewhere don't fail the cleanup check.
-const pids = () => new Set(pidList());
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+async function waitGone(pids, ms = 15000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end && pids.some(alive)) await new Promise((r) => setTimeout(r, 250));
+  return pids.filter(alive);
+}
 const profiles = () => new Set(readdirSync(os.tmpdir()).filter((n) => n.startsWith('gpu-browser-')));
-const before = { pids: pids(), profiles: profiles() };
+const before = { profiles: profiles() };
 
 const client = new Client({ name: 'gpu-browser-test', version: '1.0.0' });
 const transport = new StdioClientTransport({ command: process.execPath, args: [path.join(here, '..', 'bin', 'gpu-browser-mcp.mjs')], env: { ...process.env }, stderr: 'ignore' });
@@ -142,9 +147,34 @@ await step('hung page: eval times out, logs flag it, close works', async () => {
 });
 
 // Leave sid open: closing the client must tear it down.
+const ours = childPids(transport.pid).filter((p) => p !== transport.pid);
 await client.close();
-await new Promise((r) => setTimeout(r, 2500));
-await step('client disconnect cleans up everything', () => {
-  assert.deepEqual([...pids()].filter((p) => !before.pids.has(p)), [], 'no browser processes left');
+await step('client disconnect cleans up everything', async () => {
+  assert.ok(ours.length >= 1, 'found the open session\'s browser');
+  assert.deepEqual(await waitGone(ours), [], 'no browser processes left');
+  const end = Date.now() + 10000;
+  while (Date.now() < end && [...profiles()].some((p) => !before.profiles.has(p))) await new Promise((r) => setTimeout(r, 250));
   assert.deepEqual([...profiles()].filter((p) => !before.profiles.has(p)), [], 'no temp profiles left');
 });
+
+// The server killed outright (SIGKILL, or TerminateProcess on Windows): no exit handlers run,
+// so the reaper must kill the browsers and delete their profiles.
+await step('hard-killed server leaves no browsers (reaper)', async () => {
+  const c2 = new Client({ name: 'gpu-browser-kill-test', version: '1.0.0' });
+  const t2 = new StdioClientTransport({ command: process.execPath, args: [path.join(here, '..', 'bin', 'gpu-browser-mcp.mjs')], env: { ...process.env }, stderr: 'ignore' });
+  await c2.connect(t2);
+  const before2 = profiles();
+  for (const p of ['blank.html', 'hang.html']) {
+    const r = await c2.callTool({ name: 'open', arguments: { target: page(p), wait: [] } });
+    assert.ok(!r.isError, r.content[0].text);
+  }
+  const browsers = childPids(t2.pid).filter((p) => p !== t2.pid);
+  const created = [...profiles()].filter((p) => !before2.has(p));
+  assert.ok(browsers.length >= 2, `expected 2 browsers, found ${browsers.length}`);
+  process.kill(t2.pid, 'SIGKILL');
+  assert.deepEqual(await waitGone(browsers), [], 'browsers killed');
+  const end = Date.now() + 10000;
+  while (Date.now() < end && created.some((p) => profiles().has(p))) await new Promise((r) => setTimeout(r, 250));
+  assert.deepEqual(created.filter((p) => profiles().has(p)), [], 'profiles deleted');
+});
+process.exit(process.exitCode ?? 0);

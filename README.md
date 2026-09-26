@@ -38,7 +38,7 @@ Start a new Claude Code session afterwards. The same commands work in PowerShell
 | macOS / Linux | `~/.cache/gpu-browser` (or `$XDG_CACHE_HOME/gpu-browser`) |
 | Windows | `%LOCALAPPDATA%\gpu-browser` |
 
-Override it with `GPU_BROWSER_CACHE`, or point at an existing Chrome binary with `GPU_BROWSER_EXECUTABLE`. Set `GPU_BROWSER_SKIP_DOWNLOAD=1` to skip the install-time download.
+To apply extra Chromium switches to every launch, set `GPU_BROWSER_EXTRA_FLAGS` (space-separated). Override the cache location with `GPU_BROWSER_CACHE`, or point at an existing Chrome binary with `GPU_BROWSER_EXECUTABLE`. Set `GPU_BROWSER_SKIP_DOWNLOAD=1` to skip the install-time download.
 
 **Check the install:** run `gpu-browser` with no arguments. It prints the GPU report. If `warnings` is missing or empty, you're on hardware.
 
@@ -150,7 +150,7 @@ To register it, see [Install](#install) (`gpu-browser setup-claude`).
 | `fps`, `resize`, `gpu_info` | Same measurements as the CLI flags; `resize` changes the viewport |
 | `close`, `list_sessions` | Close sessions when done; each one holds a browser |
 
-Sessions close automatically after 15 idle minutes (`GPU_BROWSER_IDLE_MINUTES`). At most 8 can be open at once (`GPU_BROWSER_MAX_SESSIONS`). When the client disconnects, every browser and temp profile is removed.
+Sessions close automatically after 15 idle minutes (`GPU_BROWSER_IDLE_MINUTES`). At most 8 can be open at once (`GPU_BROWSER_MAX_SESSIONS`). When the client disconnects, every browser and temp profile is removed. A small reaper process does the same if the server is killed outright, so no browsers are left orphaned, including on Windows.
 
 Every tool call has a time limit (30 s by default). On a hung page, calls return a "timed out (page busy or hung?)" error, `logs` reports `page-unresponsive`, and `close` still cleans up.
 

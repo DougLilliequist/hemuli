@@ -1,0 +1,12 @@
+<!doctype html><meta charset=utf-8><title>plain</title>
+<style>body{margin:0;background:#123}</style>
+<script>
+// No GPU use: for tests of JS error handling and frame pacing on any machine.
+const p = new URLSearchParams(location.search);
+let frames = 0;
+function frame() { frames++; requestAnimationFrame(frame); }
+requestAnimationFrame(frame);
+window.frameCount = () => frames;
+if (p.has('reject')) Promise.reject(new Error('async boom'));
+if (p.has('throw')) setTimeout(() => { null.boom(); }, 100);
+</script>

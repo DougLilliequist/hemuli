@@ -13,6 +13,8 @@ jobs:
     env:
       GPU_BROWSER_ENGINE: ${{ matrix.engine }}
       GPU_BROWSER_TEST_CONCURRENCY: 3
+      # Linux runners have no GPU: allow SwiftShader so WebGL still renders there.
+      GPU_BROWSER_EXTRA_FLAGS: ${{ matrix.os == 'ubuntu-latest' && '--enable-unsafe-swiftshader' || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

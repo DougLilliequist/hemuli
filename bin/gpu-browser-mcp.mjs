@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { Session, ROOT, withTimeout, gpuWarnings } from '../lib/core.mjs';
+import { startReaper } from '../lib/reaper.mjs';
 
 const PKG = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const MAX_SESSIONS = Number(process.env.GPU_BROWSER_MAX_SESSIONS) || 8;
@@ -20,6 +21,9 @@ const WAIT_SPECS = '"<ms>" sleep · "idle" network idle · "frames:<n>" rAF tick
 
 // ---------- session registry ----------
 const sessions = new Map(); // id -> { session, lastUsed, gpuSeen: Map<key,count>, cursor }
+// If this server is killed outright (Claude Code exiting, TerminateProcess on Windows), no exit
+// handler runs; the reaper then kills the browsers and deletes their profiles.
+const reaper = startReaper();
 let nextId = 1;
 
 function resetCursors(entry) {
@@ -43,17 +47,19 @@ async function closeEntry(id) {
   const entry = sessions.get(id);
   if (!entry) return false;
   sessions.delete(id);
+  const pid = entry.session.browser?.process()?.pid;
   await entry.session.close();
+  reaper.remove(pid);
   return true;
 }
 
-const reaper = setInterval(() => {
+const idleTimer = setInterval(() => {
   for (const [id, e] of sessions) if (Date.now() - e.lastUsed > IDLE_MS) {
     console.error(`[gpu-browser] closing idle session ${id}`);
     closeEntry(id);
   }
 }, 30_000);
-reaper.unref();
+idleTimer.unref();
 
 let shuttingDown = false;
 async function shutdownAll(code) {
@@ -175,6 +181,7 @@ server.registerTool('open', {
   resetCursors(entry);
   try {
     await s.start();
+    reaper.add(s.browser.process()?.pid, s.profileDir);
     const url = s.resolve(a.target, a.root);
     sessions.set(id, entry);
     s.onNavigate = () => { entry.gpuSeen = new Map(); };
