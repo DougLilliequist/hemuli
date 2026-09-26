@@ -5,6 +5,7 @@
 // With CI=1 or GPU_BROWSER_TEST_LENIENT=1 (GPU-less CI runners) the adapter is only reported,
 // and cases needing an API the runner lacks are skipped instead of failed.
 import { execFile } from 'node:child_process';
+import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -36,6 +37,12 @@ const has = {
 console.log(`engine=${gpu.engine}  adapter=${JSON.stringify(gpu.gpu?.webgpu?.adapter)}  webgl2=${gpu.gpu?.webgl2?.renderer}`);
 if (gpu.warnings?.length) console.log(`warnings: ${gpu.warnings.join(' | ')}`);
 
+// A server that answers only after 4 s: navigation times out, then the document commits late.
+// The late commit must not erase the navigation failure (regression seen on a slow Windows runner).
+const slow = createServer((req, res) => setTimeout(() => { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end('<p>late</p>'); }, 4000));
+await new Promise((r) => slow.listen(0, '127.0.0.1', r));
+const slowUrl = `http://localhost:${slow.address().port}/`;
+
 const cases = [
   // [name, needs, args, expected exit code, check]
   ['hardware GPU (strict mode only)', lenient ? 'skip' : null, [], 0, (r) => r.gpu.webgpu.adapter && !r.gpu.webgpu.adapter.isFallbackAdapter && r.gpu.webgl2 && !r.warnings],
@@ -61,6 +68,7 @@ const cases = [
   // launch was slow enough that the hard backstop fired first).
   ['time budget enforced', null, [page('blank.html'), '--wait', '60000', '--timeout', '6000'], [1, 124], (r) => r.durationMs < 10000 && !r.ok],
   ['bad target', null, [page('does-not-exist.html')], 2, () => true],
+  ['late commit keeps navigation failure', null, [slowUrl, '--timeout', '4500'], [1, 124], (r) => !r.ok && r.failures.some((f) => /^(navigation|timeout)/.test(f))],
 ];
 
 const limit = Number(process.env.GPU_BROWSER_TEST_CONCURRENCY) || 6;
@@ -80,6 +88,23 @@ const results = await pool(async ([name, needs, args, code, check]) => {
   }
   return { name, ok, why, stdout: stdout || stderr };
 });
+slow.close();
+
+// Direct check of the same race: a document commit after a tool failure must not erase it.
+results.push(await (async () => {
+  const name = 'commit after tool failure keeps it';
+  const { Session } = await import('../lib/core.mjs');
+  const s = new Session();
+  try {
+    await s.start();
+    await s.goto(s.resolve(page('plain.html')));
+    s.fail('navigation', 'simulated timeout');
+    s.resetOnCommit = true; // as if goto() had just started this navigation
+    await Promise.all([s.page.waitForNavigation(), s.page.evaluate(() => { location.search = '?again'; })]);
+    const ok = s.failures().some((f) => f.startsWith('navigation: simulated timeout'));
+    return { name, ok, why: ok ? '' : `failures after commit: ${JSON.stringify(s.failures())}` };
+  } catch (e) { return { name, ok: false, why: e.message }; } finally { await s.close(); }
+})());
 for (const r of results) console.log(r.skipped ? `SKIP  ${r.name} (${r.skipped})` : `${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.why ? '  -- ' + r.why : ''}`);
 const failed = results.filter((r) => r.ok === false);
 if (failed.length) { for (const f of failed) console.log(`\n--- ${f.name}\n${(f.stdout || '').slice(0, 2000)}`); process.exit(1); }
