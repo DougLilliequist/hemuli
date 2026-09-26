@@ -1,0 +1,40 @@
+<!doctype html><meta charset=utf-8><title>webgpu triangle</title>
+<style>html,body{margin:0;background:#000}canvas{display:block;width:100vw;height:100vh}</style>
+<canvas id=c></canvas>
+<script type=module>
+const p = new URLSearchParams(location.search);
+const c = document.getElementById('c');
+c.width = innerWidth; c.height = innerHeight;
+const adapter = await navigator.gpu.requestAdapter();
+const device = await adapter.requestDevice(p.has('reject') ? { requiredFeatures: ['not-a-feature'] } : undefined);
+const ctx = c.getContext('webgpu');
+const format = navigator.gpu.getPreferredCanvasFormat();
+ctx.configure({ device, format });
+const code = p.has('badshader')
+  ? `@vertex fn vs() -> @builtin(position) vec4f { return vec4f(undefinedThing, 0, 1); }`
+  : `@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+       var p = array(vec2f(0, .7), vec2f(-.7, -.7), vec2f(.7, -.7));
+       return vec4f(p[i], 0, 1); }
+     @fragment fn fs() -> @location(0) vec4f { return vec4f(1, .4, .1, 1); }`;
+const module = device.createShaderModule({ label: 'tri', code });
+const pipeline = device.createRenderPipeline({ layout: 'auto',
+  vertex: { module, entryPoint: 'vs' },
+  fragment: { module, entryPoint: 'fs', targets: [{ format }] } });
+let frames = 0;
+function frame() {
+  const enc = device.createCommandEncoder();
+  const pass = enc.beginRenderPass({ colorAttachments: [{ view: ctx.getCurrentTexture().createView(),
+    loadOp: 'clear', storeOp: 'store', clearValue: { r: .05, g: .1, b: .2, a: 1 } }] });
+  pass.setPipeline(pipeline);
+  pass.draw(3);
+  if (p.has('validation')) device.createBuffer({ size: 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.VERTEX });
+  pass.end();
+  device.queue.submit([enc.finish()]);
+  if (++frames === 5) console.log('rendered-ready');
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+window.frameCount = () => frames;
+window.inputLog = [];
+for (const t of ['pointerdown', 'pointerup', 'wheel', 'keydown']) addEventListener(t, (e) => inputLog.push(t + (e.key ? ':' + e.key : '')));
+</script>

@@ -1,0 +1,23 @@
+name: test
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  test:
+    # Hosted runners have no GPU: tests run lenient (CI=true), so this checks install, paths,
+    # launch, error detection and cleanup on every OS. The adapter/warnings are printed for info.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        engine: [shell, chrome]
+    runs-on: ${{ matrix.os }}
+    env:
+      GPU_BROWSER_ENGINE: ${{ matrix.engine }}
+      GPU_BROWSER_TEST_CONCURRENCY: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test

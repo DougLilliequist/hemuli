@@ -1,0 +1,42 @@
+{
+  "name": "gpu-browser",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Lean headless Chromium for agents to run, debug and validate WebGPU / WebGL builds",
+  "type": "module",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=18.17"
+  },
+  "os": [
+    "darwin",
+    "win32",
+    "linux"
+  ],
+  "bin": {
+    "gpu-browser": "bin/gpu-browser.mjs",
+    "gpu-browser-mcp": "bin/gpu-browser-mcp.mjs"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "skill/",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node bin/setup.mjs",
+    "setup": "node bin/gpu-browser.mjs setup",
+    "setup-claude": "node bin/gpu-browser.mjs setup-claude",
+    "mcp": "node bin/gpu-browser-mcp.mjs",
+    "test": "node test/unit-tests.mjs && node test/run-tests.mjs && node test/mcp-test.mjs"
+  },
+  "gpuBrowser": {
+    "chromeVersion": "154.0.8037.57"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.1",
+    "@puppeteer/browsers": "^2.10.0",
+    "puppeteer-core": "^24.0.0",
+    "zod": "^4.6.5"
+  }
+}

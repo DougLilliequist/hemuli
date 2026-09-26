@@ -1,0 +1,29 @@
+<!doctype html><meta charset=utf-8><title>webgl2 triangle</title>
+<style>html,body{margin:0;background:#000}canvas{display:block;width:100vw;height:100vh}</style>
+<canvas id=c></canvas>
+<script>
+const p = new URLSearchParams(location.search);
+const c = document.getElementById('c'); c.width = innerWidth; c.height = innerHeight;
+const gl = c.getContext('webgl2');
+function sh(type, src) { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s; }
+const prog = gl.createProgram();
+gl.attachShader(prog, sh(gl.VERTEX_SHADER, `#version 300 es
+  void main() { vec2 p[3] = vec2[](vec2(0,.7), vec2(-.7,-.7), vec2(.7,-.7)); gl_Position = vec4(p[gl_VertexID], 0, 1); }`));
+gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, `#version 300 es
+  precision mediump float; out vec4 o; void main() { o = vec4(.2, .9, .4, 1)${p.has('badshader') ? ' + nope' : ''}; }`));
+gl.linkProgram(prog);
+let frames = 0;
+function frame() {
+  gl.viewport(0, 0, c.width, c.height);
+  gl.clearColor(.1, .05, .2, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.useProgram(prog); gl.drawArrays(gl.TRIANGLES, 0, 3);
+  if (++frames === 5) console.log('rendered-ready');
+  requestAnimationFrame(frame);
+}
+frame();
+window.frameCount = () => frames;
+window.inputLog = [];
+for (const t of ['pointerdown', 'pointerup', 'wheel', 'keydown']) addEventListener(t, (e) => inputLog.push(t + (e.key ? ':' + e.key : '')));
+if (p.has('reject')) Promise.reject(new Error('async boom'));
+if (p.has('throw')) setTimeout(() => { null.boom(); }, 100);
+</script>
