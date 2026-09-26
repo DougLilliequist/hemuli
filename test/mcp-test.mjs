@@ -118,7 +118,7 @@ await step('fps + wait + resize', async () => {
 });
 await step('navigate to broken shader, logs are incremental', async () => {
   const shaderError = { webgpu: 'webgpu-shader-error', webgl2: 'webgl-shader-error' }[api] || 'pageerror';
-  const r = await call('navigate', { session: sid, target: page(`${mainPage}?${api ? 'badshader' : 'throw'}`), wait: [lenient ? '3000' : '500'] });
+  const r = await call('navigate', { session: sid, target: page(`${mainPage}?${api ? 'badshader' : 'throw'}`), wait: [ready, lenient ? '1500' : '300'] });
   assert.equal(r.json.ok, false);
   assert.ok(r.json.failures.some((f) => f.startsWith(shaderError) || f.startsWith('webgpu-error (console)')), JSON.stringify(r.json.failures));
   await new Promise((res) => setTimeout(res, 300));
