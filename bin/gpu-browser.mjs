@@ -44,9 +44,9 @@ Options
   --flag <arg>        Repeatable. Extra Chromium command-line switch.
   --out <file.json>   Also write the report to a file.
   --gpu-info          Include full adapter features and limits.
-  --engine <name>     shell (default, lean chrome-headless-shell) or chrome (full Chrome for
-                      Testing, new headless). Env: GPU_BROWSER_ENGINE. Use chrome if
-                      "warnings" says the GPU isn't used.
+  --engine <name>     shell (lean chrome-headless-shell; default on macOS/Linux) or chrome
+                      (full Chrome for Testing, new headless; default on Windows).
+                      Env: GPU_BROWSER_ENGINE. Use chrome if "warnings" says the GPU isn't used.
   -h, --help
 
 Exit codes: 0 ok, 1 errors found, 2 bad usage / setup, 124 timeout.
@@ -195,7 +195,7 @@ async function main() {
   // GPU info from a clean page on the same origin, so it can't disturb the app.
   try {
     report.gpu = await session.gpuInfo(opt['gpu-info'], budget());
-    report.warnings = gpuWarnings(report.gpu, session.engine);
+    report.warnings = gpuWarnings(report.gpu, session.engine, session);
     report.engine = session.engine;
   } catch (e) { report.gpu = { error: e.message }; }
   report.jsHeapMB = await session.jsHeapMB();

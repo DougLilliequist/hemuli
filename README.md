@@ -54,8 +54,10 @@ On native Windows, use `"command": "cmd", "args": ["/c", "gpu-browser-mcp"]` ins
 
 | Engine | What | Size |
 |---|---|---|
-| `shell` (default) | `chrome-headless-shell`: Chromium stripped for headless use, with no UI, extensions, sync or history. About 65 MB of memory per instance on macOS | ~200 MB |
-| `chrome` | Full Chrome for Testing in new headless mode. It's the same browser as desktop Chrome, so use it if `shell` reports software rendering on a machine | ~365 MB |
+| `shell` (default on macOS / Linux) | `chrome-headless-shell`: Chromium stripped for headless use, with no UI, extensions, sync or history. About 65 MB of memory per instance on macOS | ~200 MB |
+| `chrome` (default on Windows) | Full Chrome for Testing in new headless mode. It's the same browser as desktop Chrome, so use it if `shell` reports software rendering on a machine | ~365 MB |
+
+**Why Windows defaults to `chrome`:** the Windows build of `chrome-headless-shell` doesn't include `dxil.dll`, the DirectX shader compiler library WebGPU uses on D3D12. With it missing, the shell finds an adapter but `requestDevice()` fails. When you force `--engine shell` on Windows, gpu-browser switches Dawn to FXC, the older compiler that ships with Windows. That works, but shader-f16 and other features that need DXC may be missing.
 
 Pick one per run with `--engine chrome` (CLI) or `engine: "chrome"` (MCP `open`), or set it globally with `GPU_BROWSER_ENGINE=chrome`. Both are pinned to the same Chromium version.
 
@@ -159,7 +161,8 @@ Every tool call has a time limit (30 s by default). On a hung page, calls return
 - `fps` measures the headless compositor's frame pacing plus the CPU time in the app's rAF callbacks. It doesn't include GPU execution time.
 - It's headless only: there's no DevTools UI and no extensions. That's what keeps it light.
 - A report's `warnings` flags software rendering (a fallback WebGPU adapter, or SwiftShader, llvmpipe or WARP for WebGL). Warnings don't change the exit code.
-- On Linux as root (containers, CI), `--no-sandbox` is added automatically.
+- On Linux, `--no-sandbox` is used when running as root (containers, CI), or when the system blocks Chromium's sandbox, as Ubuntu 23.10+ does via AppArmor. In that case `warnings` says so.
+- WebGPU errors also appear as console warnings. Any the in-page hooks haven't recorded yet, which can happen on very slow machines, still fail the run, as `webgpu-error (console)`.
 
 ## Developing
 

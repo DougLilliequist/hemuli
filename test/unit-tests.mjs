@@ -21,6 +21,17 @@ const tests = {
     assert.equal(w.length, 3);
     assert.match(w[2], /GPU_BROWSER_ENGINE=chrome/);
   },
+  'warnings: WARP adapter counts as software': () => {
+    const w = gpuWarnings({ webgpu: { available: true, adapter: { vendor: 'microsoft', architecture: 'warp', description: '', isFallbackAdapter: false } }, webgl2: { renderer: 'ANGLE (NVIDIA)' } }, 'chrome');
+    assert.equal(w.length, 1);
+    assert.match(w[0], /software adapter/);
+  },
+  'warnings: adapter without device, sandbox disabled': () => {
+    const w = gpuWarnings({ webgpu: { available: true, adapter: { vendor: 'x', architecture: 'y', isFallbackAdapter: false }, deviceError: 'DynamicLib.Open: dxil.dll' }, webgl2: { renderer: 'ANGLE (NVIDIA)' } }, 'shell', { sandboxDisabled: true });
+    assert.equal(w.length, 3);
+    assert.match(w[0], /no-sandbox/);
+    assert.match(w[1], /dxil/);
+  },
   'warnings: WARP / no WebGPU, chrome engine gives no engine hint': () => {
     const w = gpuWarnings({ webgpu: { available: false }, webgl2: { renderer: 'ANGLE (Microsoft, Microsoft Basic Render Driver)' } }, 'chrome');
     assert.equal(w.length, 2);

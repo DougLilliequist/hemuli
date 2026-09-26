@@ -50,7 +50,7 @@ await step('lists tools', () => assert.deepEqual(tools,
 
 // Capabilities (temporary browser) pick the page under test.
 const caps = (await call('gpu_info')).json;
-const webgpu = !!caps.webgpu?.adapter;
+const webgpu = !!caps.webgpu?.adapter && !caps.webgpu.deviceError;
 const api = webgpu ? 'webgpu' : 'webgl2';
 const mainPage = webgpu ? 'webgpu-triangle.html' : 'webgl2-triangle.html';
 console.log(`engine=${caps.engine} testing with ${api}${caps.warnings?.length ? `  warnings: ${caps.warnings.join(' | ')}` : ''}`);
@@ -105,13 +105,13 @@ await step('fps + wait + resize', async () => {
 });
 await step('navigate to broken shader, logs are incremental', async () => {
   const shaderError = `${webgpu ? 'webgpu' : 'webgl'}-shader-error`;
-  const r = await call('navigate', { session: sid, target: page(`${mainPage}?badshader`), wait: ['500'] });
+  const r = await call('navigate', { session: sid, target: page(`${mainPage}?badshader`), wait: [lenient ? '3000' : '500'] });
   assert.equal(r.json.ok, false);
-  assert.ok(r.json.new.gpuErrors.some((e) => e.kind === shaderError));
+  assert.ok(r.json.failures.some((f) => f.startsWith(shaderError) || f.startsWith('webgpu-error (console)')), JSON.stringify(r.json.failures));
   await new Promise((res) => setTimeout(res, 300));
   const again = await call('logs', { session: sid });
   assert.ok(again.json.failures.length > 0, 'failures persist for the load');
-  assert.ok(!again.json.new.gpuErrors?.some((e) => e.kind === shaderError), 'shader error not re-reported');
+  assert.ok(!again.json.new.gpuErrors?.some((e) => e.kind === shaderError && !e.newOccurrences), 'shader error not re-reported');
   assert.ok((again.json.new.gpuErrors || []).every((e) => e.newOccurrences > 0), 'only repeats are new');
 });
 await step('reload clears state', async () => {

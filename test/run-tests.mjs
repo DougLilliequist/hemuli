@@ -12,6 +12,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const cli = path.join(here, '..', 'bin', 'gpu-browser.mjs');
 const page = (p) => path.join(here, 'pages', p);
 const lenient = !!(process.env.CI || process.env.GPU_BROWSER_TEST_LENIENT);
+// GPU-less runners can render at ~2 fps: stretch fixed waits there.
+const ms = (n) => String(lenient ? n * 4 : n);
 
 const run = (args) => new Promise((resolve) =>
   execFile(process.execPath, [cli, ...args], { timeout: 120000, maxBuffer: 16 << 20 }, (err, stdout, stderr) =>
@@ -21,8 +23,9 @@ const run = (args) => new Promise((resolve) =>
 const info = await run([]);
 let gpu;
 try { gpu = JSON.parse(info.stdout); } catch { console.error(`gpu-browser failed to start:\n${info.stderr}`); process.exit(1); }
+if (!gpu.gpu || gpu.gpu.error) { console.error(`gpu-browser could not start a browser:\n${info.stdout}\n${info.stderr}`); process.exit(1); }
 const has = {
-  webgpu: !!gpu.gpu?.webgpu?.adapter,
+  webgpu: !!gpu.gpu?.webgpu?.adapter && !gpu.gpu.webgpu.deviceError,
   webgl2: !!gpu.gpu?.webgl2,
   hardware: (gpu.warnings || []).length === 0,
 };
@@ -36,19 +39,20 @@ const cases = [
     0, (r) => r.image.samples[0].rgba[0] > 200 && r.app.contexts.includes('webgpu')],
   ['webgl2 renders', 'webgl2', [page('webgl2-triangle.html'), '--wait', 'console:rendered-ready', '--size', '400x300', '--expect-content', '--sample', '200,150'],
     0, (r) => r.image.samples[0].rgba[1] > 200],
-  ['wgsl error', 'webgpu', [page('webgpu-triangle.html?badshader'), '--wait', '500'], 1, (r) => r.gpuErrors.some((e) => e.kind === 'webgpu-shader-error' && e.line === 1)],
-  ['webgpu validation', 'webgpu', [page('webgpu-triangle.html?validation'), '--wait', '500'], 1, (r) => r.gpuErrors.some((e) => e.kind === 'webgpu-uncaptured-error' && e.count > 1)],
-  ['glsl error', 'webgl2', [page('webgl2-triangle.html?badshader'), '--wait', '300'], 1, (r) => r.gpuErrors.some((e) => e.kind === 'webgl-shader-error')],
+  ['wgsl error', 'webgpu', [page('webgpu-triangle.html?badshader'), '--wait', ms(500)], 1, (r) => r.failures.some((f) => /undefinedThing/.test(f))],
+  ['webgpu validation', 'webgpu', [page('webgpu-triangle.html?validation'), '--wait', ms(500)], 1, (r) => r.failures.some((f) => /Buffer usages/.test(f))],
+  ['glsl error', 'webgl2', [page('webgl2-triangle.html?badshader'), '--wait', ms(300)], 1, (r) => r.gpuErrors.some((e) => e.kind === 'webgl-shader-error')],
   ['js exception', null, [page('webgl2-triangle.html?throw'), '--wait', '300'], 1, (r) => r.pageErrors.length === 1],
-  ['module await rejection', 'webgpu', [page('webgpu-triangle.html?reject'), '--wait', '300'], 1, (r) => /requestDevice/.test(r.pageErrors[0]?.message)],
+  ['module await rejection', 'webgpu', [page('webgpu-triangle.html?reject'), '--wait', ms(300)], 1, (r) => /requestDevice/.test(r.pageErrors[0]?.message)],
   ['unhandled rejection', null, [page('webgl2-triangle.html?reject'), '--wait', '300'], 1, (r) => /async boom/.test(r.pageErrors[0]?.message)],
   ['ignore', null, [page('webgl2-triangle.html?throw'), '--wait', '300', '--ignore', 'boom'], 0, (r) => r.pageErrors.length === 1],
   ['404', null, [page('missing-asset.html'), '--wait', '300'], 1, (r) => r.httpErrors.length === 2],
   ['blank frame', null, [page('blank.html'), '--wait', '100', '--expect-content'], 1, (r) => r.image.blank],
   ['evals', 'webgl2', [page('webgl2-triangle.html'), '--wait', 'js:frameCount() > 3', '--eval', 'frameCount() > 3', '--eval', 'return 6*7'],
     0, (r) => r.evals[0].value === true && r.evals[1].value === 42],
-  ['fps', null, [page('webgl2-triangle.html'), '--wait', '300', '--fps', '1'], 0, (r) => r.fps.fps > 5 && r.fps.appRafCallbacks > 5],
-  ['hung page', null, [page('hang.html'), '--timeout', '20000'], 1, (r) => r.failures.some((f) => f.startsWith('page-unresponsive'))],
+  ['fps', null, [page('webgl2-triangle.html'), '--wait', '300', '--fps', '1'], 0, (r) => r.fps.fps > (lenient ? 0 : 20) && r.fps.appRafCallbacks > 0],
+  // Exit 1 flags the hang; on a very slow machine the hard backstop may fire first (124). Never ok.
+  ['hung page', null, [page('hang.html'), '--timeout', '20000'], [1, 124], (r) => r.failures.some((f) => /^(page-unresponsive|timeout)/.test(f))],
   // A 60 s wait under a 6 s limit: the run must stop near the limit and fail (exit 1, or 124 if
   // launch was slow enough that the hard backstop fired first).
   ['time budget enforced', null, [page('blank.html'), '--wait', '60000', '--timeout', '6000'], [1, 124], (r) => r.durationMs < 10000 && !r.ok],

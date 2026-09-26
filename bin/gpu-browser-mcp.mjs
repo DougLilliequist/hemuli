@@ -163,7 +163,7 @@ server.registerTool('open', {
     coi: z.boolean().optional().describe('Send COOP/COEP headers (SharedArrayBuffer / wasm threads)'),
     ignore: z.array(z.string()).optional().describe('Regexes: matching errors are still listed but not counted as failures'),
     flags: z.array(z.string()).optional().describe('Extra Chromium switches'),
-    engine: z.enum(['shell', 'chrome']).optional().describe('shell (default, lean) or chrome (full Chrome for Testing). Use chrome if warnings report software rendering'),
+    engine: z.enum(['shell', 'chrome']).optional().describe('shell (lean; default on macOS/Linux) or chrome (full Chrome for Testing; default on Windows). Use chrome if warnings report software rendering'),
     timeout_ms: z.number().int().positive().optional().describe('Per-step timeout, default 30000'),
   },
 }, tool(async (a) => {
@@ -370,7 +370,7 @@ server.registerTool('gpu_info', {
   description: 'WebGPU adapter (vendor, architecture, fallback?), preferred canvas format, feature count, WebGL/WebGL2 renderer. full=true adds the feature list, limits and WebGL extensions. Uses the given session, or a temporary browser if none.',
   inputSchema: { session: z.string().optional(), full: z.boolean().optional() },
 }, tool(async (a) => {
-  const report = async (s) => { const gpu = await s.gpuInfo(!!a.full); return text({ engine: s.engine, warnings: gpuWarnings(gpu, s.engine), ...gpu }); };
+  const report = async (s) => { const gpu = await s.gpuInfo(!!a.full); return text({ engine: s.engine, warnings: gpuWarnings(gpu, s.engine, s), ...gpu }); };
   if (a.session) return report(get(a.session).session);
   const s = new Session();
   try { await s.start(); return await report(s); } finally { await s.close(); }

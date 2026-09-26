@@ -49,7 +49,7 @@ Fix the first root-cause error first. Later ones are often "invalid due to a pre
 
 ## If the GPU isn't used
 
-When the report or `open` result has a non-empty `warnings` list, e.g. "software fallback adapter" or "WebGL is software-rendered", the numbers and visuals won't match real hardware. Retry with the full-Chrome engine: pass `--engine chrome` to the CLI, set `engine: "chrome"` on `open`, or set `GPU_BROWSER_ENGINE=chrome`.
+When the report or `open` result has a non-empty `warnings` list, e.g. "software fallback adapter" or "WebGL is software-rendered", the numbers and visuals won't match real hardware. Retry with the full-Chrome engine: pass `--engine chrome` to the CLI, set `engine: "chrome"` on `open`, or set `GPU_BROWSER_ENGINE=chrome`. It's already the default on Windows. If a warning says a software adapter is in use (SwiftShader, WARP, llvmpipe), the machine has no usable GPU: rendering correctness can still be checked, but not performance.
 
 ## Limits
 
