@@ -16,12 +16,14 @@ Both use the same instrumentation (`lib/core.mjs`), so they catch the same error
 
 ## Install
 
-Install globally from the team repo (or run `npm install -g .` from a clone), then hook it into Claude Code:
+Install globally from the repo, then hook it into Claude Code:
 
 ```sh
-npm install -g github:<org>/gpu-browser
+npm install -g github:DougLilliequist/gpu-browser
 gpu-browser setup-claude
 ```
+
+The repo is private: you need read access plus working GitHub git credentials (SSH key or `gh auth setup-git`). If the one-liner can't authenticate, clone the repo and run `npm install -g .` inside it. To update later, re-run the same install command.
 
 `gpu-browser setup-claude` does two things:
 - It registers the MCP server with Claude Code at user scope, using the absolute path to your `node`. That avoids PATH/nvm problems and the `cmd /c` wrapper native Windows otherwise needs.
