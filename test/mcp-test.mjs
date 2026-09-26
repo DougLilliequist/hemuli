@@ -55,23 +55,29 @@ await step('lists tools', () => assert.deepEqual(tools,
 
 // Capabilities (temporary browser) pick the page under test.
 const caps = (await call('gpu_info')).json;
-const webgpu = !!caps.webgpu?.adapter && !caps.webgpu.deviceError;
-const api = webgpu ? 'webgpu' : 'webgl2';
-const mainPage = webgpu ? 'webgpu-triangle.html' : 'webgl2-triangle.html';
-console.log(`engine=${caps.engine} testing with ${api}${caps.warnings?.length ? `  warnings: ${caps.warnings.join(' | ')}` : ''}`);
+// SwiftShader in headless CI renders blank / loses contexts under load: test without the GPU there.
+const swiftshader = (s) => lenient && /swiftshader/i.test(s || '');
+const webgpu = !!caps.webgpu?.adapter && !caps.webgpu.deviceError && !swiftshader(caps.webgpu.adapter.architecture);
+const webgl2 = !!caps.webgl2 && !swiftshader(caps.webgl2.renderer);
+const api = webgpu ? 'webgpu' : webgl2 ? 'webgl2' : null; // null: GPU-free page, rendering checks skipped
+const mainPage = { webgpu: 'webgpu-triangle.html', webgl2: 'webgl2-triangle.html' }[api] || 'plain.html';
+const ready = api ? 'console:rendered-ready' : 'js:frameCount() > 3';
+console.log(`engine=${caps.engine} testing with ${api || 'no GPU API (rendering checks skipped)'}${caps.warnings?.length ? `  warnings: ${caps.warnings.join(' | ')}` : ''}`);
 await step('temporary gpu_info', () => {
   assert.ok(Array.isArray(caps.warnings));
   if (!lenient) { assert.equal(caps.webgpu.adapter.isFallbackAdapter, false); assert.deepEqual(caps.warnings, []); }
 });
 
 let sid;
-await step(`open ${api} page`, async () => {
-  const r = await call('open', { target: page(mainPage), width: 400, height: 300, wait: ['console:rendered-ready'] });
+await step(`open ${api || "GPU-free"} page`, async () => {
+  const r = await call('open', { target: page(mainPage), width: 400, height: 300, wait: [ready] });
   assert.equal(r.isError, false, JSON.stringify(r.json));
   sid = r.json.session;
   assert.equal(r.json.ok, true);
-  assert.deepEqual(r.json.app.contexts, [api]);
-  assert.equal(r.json.new.console[0].text, 'rendered-ready');
+  if (api) {
+    assert.deepEqual(r.json.app.contexts, [api]);
+    assert.equal(r.json.new.console[0].text, 'rendered-ready');
+  }
 });
 await step('logs: nothing new', async () => {
   const r = await call('logs', { session: sid });
@@ -86,10 +92,12 @@ await step('eval', async () => {
 await step('screenshot + samples', async () => {
   const r = await call('screenshot', { session: sid, samples: [[200, 150], [5, 5]] });
   assert.equal(r.content[0].type, 'image');
-  assert.equal(r.json.blank, false);
-  const [red, green] = r.json.samples[0].rgba;
-  assert.ok(webgpu ? red > 200 && green < 150 : green > 200 && red < 100, `triangle color ${r.json.samples[0].rgba}`);
-  const el = await call('screenshot', { session: sid, selector: 'canvas', include_image: false });
+  if (api) {
+    assert.equal(r.json.blank, false);
+    const [red, green] = r.json.samples[0].rgba;
+    assert.ok(webgpu ? red > 200 && green < 150 : green > 200 && red < 100, `triangle color ${r.json.samples[0].rgba}`);
+  }
+  const el = await call('screenshot', { session: sid, selector: api ? 'canvas' : 'body', include_image: false });
   assert.equal(el.content.length, 1);
   assert.equal(el.json.width, 400);
 });
@@ -109,8 +117,8 @@ await step('fps + wait + resize', async () => {
   assert.equal((await call('eval', { session: sid, js: 'innerWidth' })).json.value, 320);
 });
 await step('navigate to broken shader, logs are incremental', async () => {
-  const shaderError = `${webgpu ? 'webgpu' : 'webgl'}-shader-error`;
-  const r = await call('navigate', { session: sid, target: page(`${mainPage}?badshader`), wait: [lenient ? '3000' : '500'] });
+  const shaderError = { webgpu: 'webgpu-shader-error', webgl2: 'webgl-shader-error' }[api] || 'pageerror';
+  const r = await call('navigate', { session: sid, target: page(`${mainPage}?${api ? 'badshader' : 'throw'}`), wait: [lenient ? '3000' : '500'] });
   assert.equal(r.json.ok, false);
   assert.ok(r.json.failures.some((f) => f.startsWith(shaderError) || f.startsWith('webgpu-error (console)')), JSON.stringify(r.json.failures));
   await new Promise((res) => setTimeout(res, 300));
@@ -124,7 +132,7 @@ await step('reload clears state', async () => {
   assert.equal(r.json.ok, true);
   const rl = await call('reload', { session: sid, wait: ['300'] });
   assert.equal(rl.json.ok, true);
-  assert.deepEqual(rl.json.app.contexts, [api]);
+  if (api) assert.deepEqual(rl.json.app.contexts, [api]);
 });
 let sid2;
 await step('parallel second session + gpu_info + list', async () => {

@@ -24,9 +24,13 @@ const info = await run([]);
 let gpu;
 try { gpu = JSON.parse(info.stdout); } catch { console.error(`gpu-browser failed to start:\n${info.stderr}`); process.exit(1); }
 if (!gpu.gpu || gpu.gpu.error) { console.error(`gpu-browser could not start a browser:\n${info.stdout}\n${info.stderr}`); process.exit(1); }
+// SwiftShader in headless CI (no GPU at all) renders blank frames and loses contexts under load,
+// so rendering can't be validated there; those cases are skipped with that reason in lenient mode.
+const swiftshader = (s) => lenient && /swiftshader/i.test(s || '');
+const a = gpu.gpu?.webgpu?.adapter;
 const has = {
-  webgpu: !!gpu.gpu?.webgpu?.adapter && !gpu.gpu.webgpu.deviceError,
-  webgl2: !!gpu.gpu?.webgl2,
+  webgpu: !!a && !gpu.gpu.webgpu.deviceError && !swiftshader(a.architecture),
+  webgl2: !!gpu.gpu?.webgl2 && !swiftshader(gpu.gpu.webgl2.renderer),
   hardware: (gpu.warnings || []).length === 0,
 };
 console.log(`engine=${gpu.engine}  adapter=${JSON.stringify(gpu.gpu?.webgpu?.adapter)}  webgl2=${gpu.gpu?.webgl2?.renderer}`);
@@ -66,7 +70,7 @@ const results = await pool(async ([name, needs, args, code, check]) => {
   if (needs === 'skip') return { name, skipped: 'strict mode off' };
   if (needs && !has[needs]) {
     if (!lenient) return { name, ok: false, why: `${needs} unavailable on this machine` };
-    return { name, skipped: `${needs} unavailable` };
+    return { name, skipped: `${needs} unavailable or software-only (SwiftShader) here` };
   }
   const { code: got, stdout, stderr } = await run(args);
   const codes = [].concat(code);
