@@ -62,7 +62,7 @@ if ((sub === 'setup' || sub === 'setup-claude') && !existsSync(sub)) {
       process.exit(0);
     }
     const { setupClaude } = await import('../lib/setup-claude.mjs');
-    process.exit(setupClaude() ? 0 : 1);
+    process.exit((await setupClaude()) ? 0 : 1);
   } catch (e) { console.error(e.message); process.exit(2); }
 }
 

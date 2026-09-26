@@ -31,15 +31,14 @@ The repo is private: you need read access plus working GitHub git credentials (S
 
 Start a new Claude Code session afterwards. The same commands work in PowerShell, cmd and any Unix shell: npm creates the `gpu-browser` / `gpu-browser-mcp` shims (`.cmd` on Windows).
 
-**The browser download** (about 200 MB, once per machine and version) happens during install. If that's skipped, for example by `--ignore-scripts`, being offline or a proxy, it happens on the first run instead, with progress on stderr. It lives in a per-user cache shared by every project:
+**The browser download** (about 200 MB, once per machine and version) happens in `setup-claude`, or on the first run, with progress on stderr. To fetch it ahead of time without Claude Code, run `gpu-browser setup`. It lives in a per-user cache shared by every project:
 
 | OS | Cache |
 |---|---|
 | macOS / Linux | `~/.cache/gpu-browser` (or `$XDG_CACHE_HOME/gpu-browser`) |
 | Windows | `%LOCALAPPDATA%\gpu-browser` |
 
-To apply extra Chromium switches to every launch, set `GPU_BROWSER_EXTRA_FLAGS` (space-separated). Override the cache location with `GPU_BROWSER_CACHE`, or point at an existing Chrome binary with `GPU_BROWSER_EXECUTABLE`. Set `GPU_BROWSER_SKIP_DOWNLOAD=1` to skip the install-time download.
-
+To apply extra Chromium switches to every launch, set `GPU_BROWSER_EXTRA_FLAGS` (space-separated). Override the cache location with `GPU_BROWSER_CACHE`, or point at an existing Chrome binary with `GPU_BROWSER_EXECUTABLE`. 
 **Check the install:** run `gpu-browser` with no arguments. It prints the GPU report. If `warnings` is missing or empty, you're on hardware.
 
 **Per-project alternative:** instead of `setup-claude`, commit a `.mcp.json` to a repo so everyone working on it gets the server:

@@ -1,8 +1,7 @@
 #!/usr/bin/env node
-// npm postinstall: best-effort download of the default browser engine into the per-user cache.
-// Never fails the install: if it can't download now (offline, proxy, --ignore-scripts), the
-// first gpu-browser run downloads it instead. The import is dynamic because npm also runs this
-// inside a bare git clone (for github: installs) where dependencies aren't installed yet.
+// Best-effort download of the default browser engine into the per-user cache (`npm run setup`
+// in a clone). Not an install script: npm's lifecycle scripts are unreliable for github: installs,
+// so the browser is fetched by `gpu-browser setup` / `setup-claude` or on first run instead.
 if (process.env.GPU_BROWSER_SKIP_DOWNLOAD) process.exit(0);
 try {
   const { ensureBrowser, defaultEngine } = await import('../lib/core.mjs');
