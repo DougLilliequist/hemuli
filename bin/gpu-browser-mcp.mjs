@@ -7,10 +7,16 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { Session, ROOT, withTimeout, gpuWarnings } from '../lib/core.mjs';
 import { startReaper } from '../lib/reaper.mjs';
 
+// core.mjs pulls in puppeteer (~25 MB); every Claude session runs one of these servers, most never
+// open a browser, so it is loaded on the first tool call that needs one.
+let corePromise;
+const core = () => (corePromise ??= import('../lib/core.mjs'));
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PKG = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const MAX_SESSIONS = Number(process.env.GPU_BROWSER_MAX_SESSIONS) || 8;
 const IDLE_MS = (Number(process.env.GPU_BROWSER_IDLE_MINUTES) || 15) * 60_000;
@@ -22,8 +28,9 @@ const WAIT_SPECS = '"<ms>" sleep · "idle" network idle · "frames:<n>" rAF tick
 // ---------- session registry ----------
 const sessions = new Map(); // id -> { session, lastUsed, gpuSeen: Map<key,count>, cursor }
 // If this server is killed outright (Claude Code exiting, TerminateProcess on Windows), no exit
-// handler runs; the reaper then kills the browsers and deletes their profiles.
-const reaper = startReaper();
+// handler runs; the reaper then kills the browsers and deletes their profiles. It is a second node
+// process (~13 MB), so it only runs while sessions exist.
+let reaper;
 let nextId = 1;
 
 function resetCursors(entry) {
@@ -49,7 +56,8 @@ async function closeEntry(id) {
   sessions.delete(id);
   const pid = entry.session.browser?.process()?.pid;
   await entry.session.close();
-  reaper.remove(pid);
+  reaper?.remove(pid);
+  if (!sessions.size && reaper) { reaper.stop(); reaper = null; }
   return true;
 }
 
@@ -175,13 +183,14 @@ server.registerTool('open', {
 }, tool(async (a) => {
   if (sessions.size >= MAX_SESSIONS)
     throw new Error(`Session limit (${MAX_SESSIONS}) reached. Close one first: ${[...sessions.keys()].join(', ')}`);
+  const { Session } = await core();
   const s = new Session({ width: a.width, height: a.height, dpr: a.dpr, coi: a.coi, ignore: a.ignore, flags: a.flags, engine: a.engine, protocolTimeout: 90_000 });
   const id = `s${nextId++}`;
   const entry = { id, session: s, lastUsed: Date.now() };
   resetCursors(entry);
   try {
     await s.start();
-    reaper.add(s.browser.process()?.pid, s.profileDir);
+    (reaper ??= startReaper()).add(s.browser.process()?.pid, s.profileDir);
     const url = s.resolve(a.target, a.root);
     sessions.set(id, entry);
     s.onNavigate = () => { entry.gpuSeen = new Map(); };
@@ -311,6 +320,7 @@ server.registerTool('input', {
   inputSchema: { session: z.string(), actions: z.array(Action).min(1) },
 }, tool(async (a) => {
   const { session } = get(a.session);
+  const { withTimeout } = await core();
   const { mouse, keyboard } = session.page;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const run = async () => {
@@ -377,6 +387,7 @@ server.registerTool('gpu_info', {
   description: 'WebGPU adapter (vendor, architecture, fallback?), preferred canvas format, feature count, WebGL/WebGL2 renderer. full=true adds the feature list, limits and WebGL extensions. Uses the given session, or a temporary browser if none.',
   inputSchema: { session: z.string().optional(), full: z.boolean().optional() },
 }, tool(async (a) => {
+  const { Session, gpuWarnings } = await core();
   const report = async (s) => { const gpu = await s.gpuInfo(!!a.full); return text({ engine: s.engine, warnings: gpuWarnings(gpu, s.engine, s), ...gpu }); };
   if (a.session) return report(get(a.session).session);
   const s = new Session();
