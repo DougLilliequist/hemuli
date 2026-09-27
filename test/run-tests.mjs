@@ -1,8 +1,8 @@
 // CLI tests: each case runs the CLI and checks the exit code plus a predicate on the report.
-// Cases run in parallel on purpose (that is the intended usage), GPU_BROWSER_TEST_CONCURRENCY at a time.
+// Cases run in parallel on purpose (that is the intended usage), HEMULI_TEST_CONCURRENCY at a time.
 //
 // GPU strictness: locally (default) the machine must expose a real, hardware WebGPU adapter.
-// With CI=1 or GPU_BROWSER_TEST_LENIENT=1 (GPU-less CI runners) the adapter is only reported,
+// With CI=1 or HEMULI_TEST_LENIENT=1 (GPU-less CI runners) the adapter is only reported,
 // and cases needing an API the runner lacks are skipped instead of failed.
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:http';
@@ -10,9 +10,9 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const cli = path.join(here, '..', 'bin', 'gpu-browser.mjs');
+const cli = path.join(here, '..', 'bin', 'hemuli.mjs');
 const page = (p) => path.join(here, 'pages', p);
-const lenient = !!(process.env.CI || process.env.GPU_BROWSER_TEST_LENIENT);
+const lenient = !!(process.env.CI || process.env.HEMULI_TEST_LENIENT);
 // GPU-less runners can render at ~2 fps: stretch fixed waits there.
 const ms = (n) => String(lenient ? n * 4 : n);
 
@@ -23,8 +23,8 @@ const run = (args) => new Promise((resolve) =>
 // Capabilities decide which cases apply (and download the browser first if needed).
 const info = await run([]);
 let gpu;
-try { gpu = JSON.parse(info.stdout); } catch { console.error(`gpu-browser failed to start:\n${info.stderr}`); process.exit(1); }
-if (!gpu.gpu || gpu.gpu.error) { console.error(`gpu-browser could not start a browser:\n${info.stdout}\n${info.stderr}`); process.exit(1); }
+try { gpu = JSON.parse(info.stdout); } catch { console.error(`hemuli failed to start:\n${info.stderr}`); process.exit(1); }
+if (!gpu.gpu || gpu.gpu.error) { console.error(`hemuli could not start a browser:\n${info.stdout}\n${info.stderr}`); process.exit(1); }
 // SwiftShader in headless CI (no GPU at all) renders blank frames and loses contexts under load,
 // so rendering can't be validated there; those cases are skipped with that reason in lenient mode.
 const swiftshader = (s) => lenient && /swiftshader/i.test(s || '');
@@ -71,7 +71,7 @@ const cases = [
   ['late commit keeps navigation failure', null, [slowUrl, '--timeout', '4500'], [1, 124], (r) => !r.ok && r.failures.some((f) => /^(navigation|timeout)/.test(f))],
 ];
 
-const limit = Number(process.env.GPU_BROWSER_TEST_CONCURRENCY) || 6;
+const limit = Number(process.env.HEMULI_TEST_CONCURRENCY) || 6;
 const queue = [...cases];
 const pool = async (fn) => { const out = []; await Promise.all(Array.from({ length: limit }, async () => { while (queue.length) { const c = queue.shift(); out[cases.indexOf(c)] = await fn(c); } })); return out; };
 const results = await pool(async ([name, needs, args, code, check]) => {

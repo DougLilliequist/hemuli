@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// gpu-browser MCP server (stdio): long-lived headless Chromium sessions for interactively
+// hemuli MCP server (stdio): long-lived headless Chromium sessions for interactively
 // debugging WebGPU / WebGL builds. Each session is its own browser with its own temp profile
 // and localhost server. Idle sessions are reaped; everything is torn down when the client goes.
 // Nothing may write to stdout except the MCP transport; diagnostics go to stderr.
@@ -18,8 +18,8 @@ const core = () => (corePromise ??= import('../lib/core.mjs'));
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PKG = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
-const MAX_SESSIONS = Number(process.env.GPU_BROWSER_MAX_SESSIONS) || 8;
-const IDLE_MS = (Number(process.env.GPU_BROWSER_IDLE_MINUTES) || 15) * 60_000;
+const MAX_SESSIONS = Number(process.env.HEMULI_MAX_SESSIONS) || 8;
+const IDLE_MS = (Number(process.env.HEMULI_IDLE_MINUTES) || 15) * 60_000;
 const DEFAULT_TIMEOUT = 30_000;
 
 const WAIT_SPECS = '"<ms>" sleep · "idle" network idle · "frames:<n>" rAF ticks · "selector:<css>" element exists · ' +
@@ -63,7 +63,7 @@ async function closeEntry(id) {
 
 const idleTimer = setInterval(() => {
   for (const [id, e] of sessions) if (Date.now() - e.lastUsed > IDLE_MS) {
-    console.error(`[gpu-browser] closing idle session ${id}`);
+    console.error(`[hemuli] closing idle session ${id}`);
     closeEntry(id);
   }
 }, 30_000);
@@ -150,13 +150,13 @@ async function load(entry, url, waits, timeout, how = 'goto') {
 
 // ---------- server ----------
 const server = new McpServer(
-  { name: 'gpu-browser', version: PKG.version },
+  { name: 'hemuli', version: PKG.version },
   {
     instructions:
       'Interactive headless Chromium with a real GPU (WebGPU on Metal, WebGL via ANGLE) for debugging WebGPU/WebGL builds. ' +
       'Workflow: open (returns a session id and the load status) → logs / eval / screenshot / input / wait / fps → reload after rebuilding → close. ' +
       'Sessions are isolated browsers (~65 MB each), closed automatically after ' + IDLE_MS / 60000 + ' idle minutes. ' +
-      'For a one-shot pass/fail check, the `gpu-browser` CLI via Bash is simpler.',
+      'For a one-shot pass/fail check, the `hemuli` CLI via Bash is simpler.',
   },
 );
 
@@ -166,7 +166,7 @@ server.registerTool('open', {
     'Launch a new isolated browser session and load a target. Returns the session id, the load status (failures, console, page/GPU errors) and what the app requested from the GPU. ' +
     'target: http(s) URL, a build directory (served on localhost; opens index.html) or an .html file (its directory is served; append ?query if needed). Omit for a blank secure page. ' +
     `wait: steps run in order after load (default ["1000"]): ${WAIT_SPECS}. ` +
-    'For one-shot validation with no follow-up, the gpu-browser CLI is cheaper.',
+    'For one-shot validation with no follow-up, the hemuli CLI is cheaper.',
   inputSchema: {
     target: z.string().optional().describe('URL, directory, or .html file path (absolute paths recommended)'),
     root: z.string().optional().describe('Directory to serve instead of the target file\'s own directory (for ../assets references)'),
@@ -412,4 +412,4 @@ server.registerTool('list_sessions', {
 })))));
 
 await server.connect(new StdioServerTransport());
-console.error(`[gpu-browser] MCP server ready (max ${MAX_SESSIONS} sessions, idle close after ${IDLE_MS / 60000} min)`);
+console.error(`[hemuli] MCP server ready (max ${MAX_SESSIONS} sessions, idle close after ${IDLE_MS / 60000} min)`);

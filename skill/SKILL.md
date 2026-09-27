@@ -1,30 +1,30 @@
 ---
-name: gpu-browser
-description: Run, debug and validate WebGPU / WebGL / WGSL / GLSL / three.js builds in a lean headless Chromium with a real GPU, via the `gpu-browser` CLI (one-shot) or the gpu-browser MCP tools (interactive sessions). Use whenever you need to check that a graphics build loads, renders (not blank), has no shader compile / WebGPU validation / WebGL / JS errors, take a screenshot of it, read pixel colors, evaluate JS in it, or measure fps. Prefer this over Claude in Chrome or launching Chrome for graphics work; it's cheap enough to run many in parallel.
+name: hemuli
+description: Run, debug and validate WebGPU / WebGL / WGSL / GLSL / three.js builds in a lean headless Chromium with a real GPU, via the `hemuli` CLI (one-shot) or the hemuli MCP tools (interactive sessions). Use whenever you need to check that a graphics build loads, renders (not blank), has no shader compile / WebGPU validation / WebGL / JS errors, take a screenshot of it, read pixel colors, evaluate JS in it, or measure fps. Prefer this over Claude in Chrome or launching Chrome for graphics work; it's cheap enough to run many in parallel.
 ---
 
-# gpu-browser
+# hemuli
 
-`gpu-browser` (on PATH; `gpu-browser --help` lists every option) launches a throwaway `chrome-headless-shell`. It uses the real GPU: Metal on macOS, D3D12/D3D11 on Windows, Vulkan on Linux. It loads the target, prints a JSON report to stdout and exits. Every run has a fresh temp profile, its own localhost server on a random port and a hard timeout, so parallel runs never collide.
+`hemuli` (on PATH; `hemuli --help` lists every option) launches a throwaway `chrome-headless-shell`. It uses the real GPU: Metal on macOS, D3D12/D3D11 on Windows, Vulkan on Linux. It loads the target, prints a JSON report to stdout and exits. Every run has a fresh temp profile, its own localhost server on a random port and a hard timeout, so parallel runs never collide.
 
 Exit codes: `0` ok · `1` problems found (see `failures`) · `2` bad usage or setup · `124` timeout.
 
 ## CLI or MCP?
 
 - **One-shot check** ("does it load and render without errors?"): use the CLI below from Bash.
-- **Interactive debugging:** use the `gpu-browser` MCP tools (`mcp__gpu-browser__*`), for when you need to eval repeatedly, click, drag or scroll to move the camera, screenshot after each change, or `reload` after rebuilding. The flow is `open` → `logs` / `eval` / `input` / `screenshot` → `reload` → `close`.
+- **Interactive debugging:** use the `hemuli` MCP tools (`mcp__hemuli__*`), for when you need to eval repeatedly, click, drag or scroll to move the camera, screenshot after each change, or `reload` after rebuilding. The flow is `open` → `logs` / `eval` / `input` / `screenshot` → `reload` → `close`.
   - `logs` returns only what's new since the last call, while `failures` always covers the whole current page load.
   - Always `close` sessions when done; each one holds a browser.
 
 ## Common invocations (CLI)
 
 ```sh
-gpu-browser                                         # GPU / WebGPU adapter / WebGL renderer info
-gpu-browser dist/ --expect-content --shot /tmp/f.png   # build dir: loads, no errors, renders something
-gpu-browser src/index.html --root .                 # serve the project root, open this file
-gpu-browser http://localhost:5173/ --wait idle      # already-running dev server
-gpu-browser dist/ --wait console:ready --eval 'scene.children.length' --fps 2
-gpu-browser dist/ --sample 640,360 --size 1280x720  # RGBA at a pixel (checks colors)
+hemuli                                         # GPU / WebGPU adapter / WebGL renderer info
+hemuli dist/ --expect-content --shot /tmp/f.png   # build dir: loads, no errors, renders something
+hemuli src/index.html --root .                 # serve the project root, open this file
+hemuli http://localhost:5173/ --wait idle      # already-running dev server
+hemuli dist/ --wait console:ready --eval 'scene.children.length' --fps 2
+hemuli dist/ --sample 640,360 --size 1280x720  # RGBA at a pixel (checks colors)
 ```
 
 After `--shot`, Read the PNG to see the frame.
@@ -49,7 +49,7 @@ Fix the first root-cause error first. Later ones are often "invalid due to a pre
 
 ## If the GPU isn't used
 
-When the report or `open` result has a non-empty `warnings` list, e.g. "software fallback adapter" or "WebGL is software-rendered", the numbers and visuals won't match real hardware. Retry with the full-Chrome engine: pass `--engine chrome` to the CLI, set `engine: "chrome"` on `open`, or set `GPU_BROWSER_ENGINE=chrome`. It's already the default on Windows. If a warning says a software adapter is in use (SwiftShader, WARP, llvmpipe), the machine has no usable GPU: rendering correctness can still be checked, but not performance.
+When the report or `open` result has a non-empty `warnings` list, e.g. "software fallback adapter" or "WebGL is software-rendered", the numbers and visuals won't match real hardware. Retry with the full-Chrome engine: pass `--engine chrome` to the CLI, set `engine: "chrome"` on `open`, or set `HEMULI_ENGINE=chrome`. It's already the default on Windows. If a warning says a software adapter is in use (SwiftShader, WARP, llvmpipe), the machine has no usable GPU: rendering correctness can still be checked, but not performance.
 
 ## Limits
 

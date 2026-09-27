@@ -19,7 +19,7 @@ const tests = {
   'warnings: software': () => {
     const w = gpuWarnings({ webgpu: { available: true, adapter: { isFallbackAdapter: true } }, webgl2: { renderer: 'ANGLE (Google, SwiftShader Device)' } }, 'shell');
     assert.equal(w.length, 3);
-    assert.match(w[2], /GPU_BROWSER_ENGINE=chrome/);
+    assert.match(w[2], /HEMULI_ENGINE=chrome/);
   },
   'warnings: WARP adapter counts as software': () => {
     const w = gpuWarnings({ webgpu: { available: true, adapter: { vendor: 'microsoft', architecture: 'warp', description: '', isFallbackAdapter: false } }, webgl2: { renderer: 'ANGLE (NVIDIA)' } }, 'chrome');

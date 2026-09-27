@@ -1,15 +1,15 @@
-# gpu-browser
+# hemuli
 
 A lean, throwaway headless Chromium for **coding agents** to run, debug and validate **WebGPU / WebGL** builds, on the real GPU.
 
-Launching full Chrome for every check is heavy, and several agents testing in parallel make it worse. gpu-browser gives each check its own small, isolated browser (about 65 MB for a simple scene). It loads the build, catches everything that went wrong (WGSL and GLSL errors, WebGPU validation errors, exceptions, 404s, blank frames) and reports back in JSON that an agent can act on.
+Launching full Chrome for every check is heavy, and several agents testing in parallel make it worse. hemuli gives each check its own small, isolated browser (about 65 MB for a simple scene). It loads the build, catches everything that went wrong (WGSL and GLSL errors, WebGPU validation errors, exceptions, 404s, blank frames) and reports back in JSON that an agent can act on.
 
 There are two ways to use it:
 
 | | When | How |
 |---|---|---|
-| **CLI** (`gpu-browser`) | "Does this build load, render, and stay error-free?" A one-shot pass/fail check | Launch, load, collect, print a JSON report, exit |
-| **MCP server** (`gpu-browser-mcp`) | Poking at a running app over several steps: eval, click, drag the camera, screenshot, reload after a rebuild | Long-lived sessions driven through MCP tools |
+| **CLI** (`hemuli`) | "Does this build load, render, and stay error-free?" A one-shot pass/fail check | Launch, load, collect, print a JSON report, exit |
+| **MCP server** (`hemuli-mcp`) | Poking at a running app over several steps: eval, click, drag the camera, screenshot, reload after a rebuild | Long-lived sessions driven through MCP tools |
 
 Both share the same instrumentation, so they catch the same problems.
 
@@ -24,19 +24,19 @@ Highlights:
 ## Quick start
 
 ```sh
-npm install -g github:DougLilliequist/gpu-browser
-gpu-browser setup-claude      # download the browser, register the MCP server + skill with Claude Code
-gpu-browser                   # GPU report: no "warnings" means you're on real hardware
+npm install -g hemuli
+hemuli setup-claude      # download the browser, register the MCP server + skill with Claude Code
+hemuli                   # GPU report: no "warnings" means you're on real hardware
 ```
 
 Then, from any project:
 
 ```sh
-gpu-browser dist/ --expect-content --shot frame.png
+hemuli dist/ --expect-content --shot frame.png
 echo $?                        # 0 = clean; 1 = problems (see "failures" in the JSON)
 ```
 
-Start a new Claude Code session after `setup-claude`. Agents then discover the tool through the installed skill and the `gpu-browser` MCP tools.
+Start a new Claude Code session after `setup-claude`. Agents then discover the tool through the installed skill and the `hemuli` MCP tools.
 
 ---
 
@@ -45,61 +45,61 @@ Start a new Claude Code session after `setup-claude`. Agents then discover the t
 ### 1. Install the package
 
 ```sh
-npm install -g github:DougLilliequist/gpu-browser
+npm install -g hemuli
 ```
 
-- **Private repo.** You need read access to the repo, plus git credentials that work with GitHub: an SSH key, or `gh auth setup-git`. If the one-liner can't authenticate, clone the repo and run `npm install -g .` inside the clone.
+- **Latest from GitHub.** `npm install -g github:DougLilliequist/hemuli` installs the current `main` instead of the latest release.
 - **Updating.** Re-run the same command.
-- **Shells.** The commands work in PowerShell, cmd, bash and zsh. npm creates the `gpu-browser` and `gpu-browser-mcp` launchers (`.cmd` files on Windows).
+- **Shells.** The commands work in PowerShell, cmd, bash and zsh. npm creates the `hemuli` and `hemuli-mcp` launchers (`.cmd` files on Windows).
 
 ### 2. Set up Claude Code (optional)
 
 ```sh
-gpu-browser setup-claude
+hemuli setup-claude
 ```
 
 This command:
 1. **Downloads the browser** (about 200 MB, once per machine and Chromium version).
 2. **Registers the MCP server** with Claude Code at user scope. It uses the absolute path to your `node` binary, which avoids PATH and nvm problems and the `cmd /c` wrapper native Windows otherwise needs.
-3. **Installs the agent skill** to `~/.claude/skills/gpu-browser/SKILL.md`. The skill tells agents when to use the CLI and when to use the MCP tools.
+3. **Installs the agent skill** to `~/.claude/skills/hemuli/SKILL.md`. The skill tells agents when to use the CLI and when to use the MCP tools.
 
-It's safe to re-run; it replaces the previous registration. To remove it: `claude mcp remove gpu-browser` and delete `~/.claude/skills/gpu-browser/`.
+It's safe to re-run; it replaces the previous registration. To remove it: `claude mcp remove hemuli` and delete `~/.claude/skills/hemuli/`.
 
 **Per-project alternative:** instead of the user-level registration, commit a `.mcp.json` to a repo so everyone working in it gets the server:
 
 ```json
-{ "mcpServers": { "gpu-browser": { "command": "gpu-browser-mcp" } } }
+{ "mcpServers": { "hemuli": { "command": "hemuli-mcp" } } }
 ```
 
-On native Windows, use `{ "command": "cmd", "args": ["/c", "gpu-browser-mcp"] }` instead.
+On native Windows, use `{ "command": "cmd", "args": ["/c", "hemuli-mcp"] }` instead.
 
 ### 3. Check it
 
 ```sh
-gpu-browser
+hemuli
 ```
 
 This prints the GPU report: the WebGPU adapter, the WebGL renderer and, if something's off, `warnings`. On real hardware, `warnings` is absent. If it reports software rendering, see [Troubleshooting](#troubleshooting).
 
 ### Where the browser lives
 
-The browser downloads on first use (or with `gpu-browser setup`) into a per-user cache shared by every project and install:
+The browser downloads on first use (or with `hemuli setup`) into a per-user cache shared by every project and install:
 
 | OS | Cache |
 |---|---|
-| macOS / Linux | `~/.cache/gpu-browser` (or `$XDG_CACHE_HOME/gpu-browser`) |
-| Windows | `%LOCALAPPDATA%\gpu-browser` |
+| macOS / Linux | `~/.cache/hemuli` (or `$XDG_CACHE_HOME/hemuli`) |
+| Windows | `%LOCALAPPDATA%\hemuli` |
 
-To move it, set `GPU_BROWSER_CACHE`. To use an existing Chrome/Chromium binary, set `GPU_BROWSER_EXECUTABLE`.
+To move it, set `HEMULI_CACHE`. To use an existing Chrome/Chromium binary, set `HEMULI_EXECUTABLE`.
 
 ---
 
 ## CLI
 
 ```
-gpu-browser [target] [options]
-gpu-browser setup [--engine chrome]     download the browser now
-gpu-browser setup-claude                register MCP server + skill with Claude Code
+hemuli [target] [options]
+hemuli setup [--engine chrome]     download the browser now
+hemuli setup-claude                register MCP server + skill with Claude Code
 ```
 
 `target` can be any of:
@@ -114,28 +114,28 @@ Local files are always served over `http://localhost`, a secure context. That ma
 
 ```sh
 # Validate a production build: loads, renders something, no errors
-gpu-browser dist/ --expect-content --shot /tmp/frame.png
+hemuli dist/ --expect-content --shot /tmp/frame.png
 
 # Wait for the app's own readiness signal instead of a fixed sleep
-gpu-browser dist/ --wait console:ready --expect-content
+hemuli dist/ --wait console:ready --expect-content
 
 # An already-running Vite dev server, one specific example
-gpu-browser "http://localhost:5173/?view=fluid" --wait idle --wait 2000 --shot /tmp/fluid.png
+hemuli "http://localhost:5173/?view=fluid" --wait idle --wait 2000 --shot /tmp/fluid.png
 
 # Inspect app state and measure frame rate
-gpu-browser dist/ --wait js:window.app?.ready --eval "app.scene.children.length" --fps 3
+hemuli dist/ --wait js:window.app?.ready --eval "app.scene.children.length" --fps 3
 
 # Check colors: RGBA at the center pixel
-gpu-browser dist/ --size 800x600 --sample 400,300
+hemuli dist/ --size 800x600 --sample 400,300
 
 # Assets referenced as ../assets/...: serve the project root, open a nested file
-gpu-browser examples/demo/index.html --root .
+hemuli examples/demo/index.html --root .
 
 # SharedArrayBuffer / wasm threads
-gpu-browser dist/ --coi
+hemuli dist/ --coi
 
 # Many checks at once: each is fully isolated
-for v in fluid ssao taa; do gpu-browser "dist/index.html?view=$v" --expect-content > "$v.json" & done; wait
+for v in fluid ssao taa; do hemuli "dist/index.html?view=$v" --expect-content > "$v.json" & done; wait
 ```
 
 **Builds with a base path.** Suppose a build expects to live under a sub-path, e.g. Vite `base: '/app/'` so assets load from `/app/assets/...`. Point `--root` at a folder in which `app/` is the build; a symlink works (`mkdir serve && ln -s ../dist serve/app`). Then open `serve/app/index.html` with `--root serve`. Alternatively, run the project's own preview server and pass its URL.
@@ -248,7 +248,7 @@ The JSON report (abridged):
 
 ## MCP server
 
-The MCP server keeps browser sessions open so an agent can work with a running app step by step. `gpu-browser setup-claude` registers it; to run it by hand, use `gpu-browser-mcp` (stdio transport).
+The MCP server keeps browser sessions open so an agent can work with a running app step by step. `hemuli setup-claude` registers it; to run it by hand, use `hemuli-mcp` (stdio transport).
 
 A typical flow:
 
@@ -278,8 +278,8 @@ close
 | `list_sessions`, `close` | Lists open sessions; closes one (kills its browser, deletes its profile) |
 
 **Limits and cleanup:**
-- **Session count:** at most 8 open at once (`GPU_BROWSER_MAX_SESSIONS`).
-- **Idle sessions:** closed after 15 minutes (`GPU_BROWSER_IDLE_MINUTES`).
+- **Session count:** at most 8 open at once (`HEMULI_MAX_SESSIONS`).
+- **Idle sessions:** closed after 15 minutes (`HEMULI_IDLE_MINUTES`).
 - **Time limit per call:** 30 s by default. On a frozen page, calls return a "timed out (page busy or hung?)" error, `logs` reports `page-unresponsive`, and `close` still works.
 - **Cleanup:** when the client disconnects, every browser and profile is removed. A small reaper process does the same if the server is killed outright (e.g. Claude Code exiting, or `TerminateProcess` on Windows), so no browsers are orphaned.
 
@@ -287,16 +287,16 @@ close
 
 ## Engines
 
-Both engines are Chrome for Testing builds, pinned to the same Chromium version (`gpuBrowser.chromeVersion` in `package.json`).
+Both engines are Chrome for Testing builds, pinned to the same Chromium version (`hemuli.chromeVersion` in `package.json`).
 
 | Engine | What it is | Download |
 |---|---|---|
 | `shell` (default on macOS / Linux) | `chrome-headless-shell`: Chromium stripped down for headless use. The lightest option | ~200 MB |
 | `chrome` (default on Windows) | Full Chrome for Testing in headless mode: the same browser as desktop Chrome | ~365 MB |
 
-Choose per run with `--engine chrome` (CLI) or `engine: "chrome"` (MCP `open`), or everywhere with `GPU_BROWSER_ENGINE=chrome`.
+Choose per run with `--engine chrome` (CLI) or `engine: "chrome"` (MCP `open`), or everywhere with `HEMULI_ENGINE=chrome`.
 
-**Why Windows defaults to `chrome`:** the Windows build of `chrome-headless-shell` doesn't include `dxil.dll`, the DirectX shader compiler that WebGPU's D3D12 backend loads. Without it, an adapter is found but `requestDevice()` fails. If you force `--engine shell` on Windows, gpu-browser switches WebGPU to FXC, the older compiler that ships with Windows. That works, but features that need DXC (e.g. `shader-f16`) may be unavailable.
+**Why Windows defaults to `chrome`:** the Windows build of `chrome-headless-shell` doesn't include `dxil.dll`, the DirectX shader compiler that WebGPU's D3D12 backend loads. Without it, an adapter is found but `requestDevice()` fails. If you force `--engine shell` on Windows, hemuli switches WebGPU to FXC, the older compiler that ships with Windows. That works, but features that need DXC (e.g. `shader-f16`) may be unavailable.
 
 ---
 
@@ -304,12 +304,12 @@ Choose per run with `--engine chrome` (CLI) or `engine: "chrome"` (MCP `open`), 
 
 | Variable | Effect |
 |---|---|
-| `GPU_BROWSER_ENGINE` | `shell` or `chrome` (default: `chrome` on Windows, `shell` elsewhere) |
-| `GPU_BROWSER_CACHE` | Browser download location |
-| `GPU_BROWSER_EXECUTABLE` | Use this Chrome/Chromium binary instead of downloading one |
-| `GPU_BROWSER_EXTRA_FLAGS` | Space-separated Chromium switches added to every launch |
-| `GPU_BROWSER_MAX_SESSIONS` | MCP: max concurrent sessions (default 8) |
-| `GPU_BROWSER_IDLE_MINUTES` | MCP: close sessions idle this long (default 15) |
+| `HEMULI_ENGINE` | `shell` or `chrome` (default: `chrome` on Windows, `shell` elsewhere) |
+| `HEMULI_CACHE` | Browser download location |
+| `HEMULI_EXECUTABLE` | Use this Chrome/Chromium binary instead of downloading one |
+| `HEMULI_EXTRA_FLAGS` | Space-separated Chromium switches added to every launch |
+| `HEMULI_MAX_SESSIONS` | MCP: max concurrent sessions (default 8) |
+| `HEMULI_IDLE_MINUTES` | MCP: close sessions idle this long (default 15) |
 
 ---
 
@@ -320,11 +320,9 @@ Choose per run with `--engine chrome` (CLI) or `engine: "chrome"` (MCP `open`), 
 - Check that the machine actually has a GPU and drivers; VMs, remote desktops and CI runners usually don't.
 - Rendering correctness can still be checked on software, but performance can't.
 
-**Windows: `requestDevice()` fails mentioning `dxil.dll`.** This comes from the `shell` engine without the FXC switch: an old gpu-browser, or `GPU_BROWSER_EXECUTABLE` pointing at a headless-shell build. Update gpu-browser, or use `--engine chrome`.
+**Windows: `requestDevice()` fails mentioning `dxil.dll`.** This comes from the `shell` engine without the FXC switch: an old hemuli, or `HEMULI_EXECUTABLE` pointing at a headless-shell build. Update hemuli, or use `--engine chrome`.
 
-**Linux: `warnings` mentions `--no-sandbox`.** Ubuntu 23.10+ blocks Chromium's sandbox through AppArmor, and containers running as root can't use it either. gpu-browser falls back to running without the sandbox. That's fine for your own builds; don't point it at untrusted sites.
-
-**`npm install -g github:…` fails to authenticate.** The repo is private. Run `gh auth setup-git`, or add an SSH key to GitHub, or clone the repo and run `npm install -g .`.
+**Linux: `warnings` mentions `--no-sandbox`.** Ubuntu 23.10+ blocks Chromium's sandbox through AppArmor, and containers running as root can't use it either. hemuli falls back to running without the sandbox. That's fine for your own builds; don't point it at untrusted sites.
 
 **The frame is blank but there are no errors.** The app may simply not have drawn yet. Wait for a readiness signal (`--wait console:<msg>` or `--wait js:<expr>`) rather than a fixed sleep. Also check `app.canvases`: a 0×0 canvas usually means a layout or resize bug.
 
@@ -346,10 +344,10 @@ Choose per run with `--engine chrome` (CLI) or `engine: "chrome"` (MCP `open`), 
 | File | Role |
 |---|---|
 | `lib/core.mjs` | `Session`: launches the browser, injects the instrumentation, serves local files, collects errors, and handles waits, evals, screenshots and fps |
-| `bin/gpu-browser.mjs` | The CLI: one `Session` per run, JSON report, exit code |
-| `bin/gpu-browser-mcp.mjs` | The MCP server: a registry of long-lived sessions, with the tools described above |
+| `bin/hemuli.mjs` | The CLI: one `Session` per run, JSON report, exit code |
+| `bin/hemuli-mcp.mjs` | The MCP server: a registry of long-lived sessions, with the tools described above |
 | `lib/reaper.mjs` | Detached watchdog that kills the MCP server's browsers if the server dies without cleaning up |
-| `lib/setup-claude.mjs` | `gpu-browser setup-claude` |
+| `lib/setup-claude.mjs` | `hemuli setup-claude` |
 | `skill/SKILL.md` | The agent skill installed by `setup-claude` |
 
 **Instrumentation.** Before any page script runs, a small hook is injected into every frame. It wraps:
@@ -364,18 +362,24 @@ Repeated errors are collected once, with a count. GPU info and screenshot analys
 ## Development
 
 ```sh
-git clone git@github.com:DougLilliequist/gpu-browser.git && cd gpu-browser
+git clone https://github.com/DougLilliequist/hemuli.git && cd hemuli
 npm install
 npm test                              # unit tests → CLI tests → end-to-end MCP client test
-GPU_BROWSER_ENGINE=chrome npm test    # the same against the full-Chrome engine
+HEMULI_ENGINE=chrome npm test         # the same against the full-Chrome engine
 ```
 
 - **`test/unit-tests.mjs`:** target parsing (including Windows drive-letter and UNC paths, checked on any OS) and the warnings logic.
 - **`test/run-tests.mjs`:** CLI cases against the pages in `test/pages/`: rendering checks with pixel samples, WGSL, GLSL and validation errors, exceptions, 404s, blank frames, hangs, time budgets.
 - **`test/mcp-test.mjs`:** drives every MCP tool through a real MCP client, including parallel sessions, a frozen page, cleanup on disconnect, and a hard-killed server.
 
-Locally, the tests require a real hardware GPU adapter. With `CI=1` (or `GPU_BROWSER_TEST_LENIENT=1`) they only report the adapter, stretch waits for slow machines, and skip the cases a GPU-less machine can't run. `GPU_BROWSER_TEST_CONCURRENCY` sets how many browsers run at once (default 6).
+Locally, the tests require a real hardware GPU adapter. With `CI=1` (or `HEMULI_TEST_LENIENT=1`) they only report the adapter, stretch waits for slow machines, and skip the cases a GPU-less machine can't run. `HEMULI_TEST_CONCURRENCY` sets how many browsers run at once (default 6).
 
 CI (`.github/workflows/test.yml`) runs the suite on macOS, Windows and Linux with both engines.
 
-**Updating Chromium:** set `gpuBrowser.chromeVersion` in `package.json` to a version listed at <https://googlechromelabs.github.io/chrome-for-testing/>, run `gpu-browser setup` (plus `gpu-browser setup --engine chrome`), then `npm test`.
+**Updating Chromium:** set `hemuli.chromeVersion` in `package.json` to a version listed at <https://googlechromelabs.github.io/chrome-for-testing/>, run `hemuli setup` (plus `hemuli setup --engine chrome`), then `npm test`.
+
+---
+
+## License
+
+MIT

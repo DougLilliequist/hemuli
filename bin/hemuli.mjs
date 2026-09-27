@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// gpu-browser: one-shot headless Chromium run for validating WebGPU / WebGL builds.
+// hemuli: one-shot headless Chromium run for validating WebGPU / WebGL builds.
 // Every invocation gets a fresh temp profile, its own static server on a random port,
 // and a hard timeout, so many can run in parallel and none leave state behind.
 import { parseArgs } from 'node:util';
@@ -8,9 +8,9 @@ import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { Session, UsageError, ensureBrowser, defaultEngine, gpuWarnings } from '../lib/core.mjs';
 
-const HELP = `gpu-browser [target] [options]
-gpu-browser setup [--engine chrome]    download the browser now (otherwise done on first run)
-gpu-browser setup-claude               register the MCP server + skill with Claude Code
+const HELP = `hemuli [target] [options]
+hemuli setup [--engine chrome]    download the browser now (otherwise done on first run)
+hemuli setup-claude               register the MCP server + skill with Claude Code
 
 Launches a throwaway headless Chromium on the real GPU (Metal on macOS, D3D12/D3D11 on
 Windows, Vulkan on Linux), loads the target, collects errors, prints a JSON report to
@@ -47,7 +47,7 @@ Options
   --gpu-info          Include full adapter features and limits.
   --engine <name>     shell (lean chrome-headless-shell; default on macOS/Linux) or chrome
                       (full Chrome for Testing, new headless; default on Windows).
-                      Env: GPU_BROWSER_ENGINE. Use chrome if "warnings" says the GPU isn't used.
+                      Env: HEMULI_ENGINE. Use chrome if "warnings" says the GPU isn't used.
   -h, --help
 
 Exit codes: 0 ok, 1 errors found, 2 bad usage / setup, 124 timeout.

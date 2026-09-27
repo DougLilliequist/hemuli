@@ -1,6 +1,6 @@
 // End-to-end test of the MCP server through a real MCP client over stdio.
 // Uses the WebGPU test page when the machine has an adapter, else the WebGL2 one, so it also runs
-// on GPU-less CI runners. Strict hardware checks are skipped with CI=1 / GPU_BROWSER_TEST_LENIENT=1.
+// on GPU-less CI runners. Strict hardware checks are skipped with CI=1 / HEMULI_TEST_LENIENT=1.
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { execSync } from 'node:child_process';
@@ -12,10 +12,10 @@ import assert from 'node:assert/strict';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const page = (p) => path.join(here, 'pages', p);
-const lenient = !!(process.env.CI || process.env.GPU_BROWSER_TEST_LENIENT);
+const lenient = !!(process.env.CI || process.env.HEMULI_TEST_LENIENT);
 
 // Only processes this test started are checked: the browsers are direct children of the server
-// under test. (Other gpu-browser users on the machine, e.g. a live Claude Code session, are ignored.)
+// under test. (Other hemuli users on the machine, e.g. a live Claude Code session, are ignored.)
 function childPids(pid) {
   try {
     const out = process.platform === 'win32'
@@ -30,11 +30,11 @@ async function waitGone(pids, ms = 15000) {
   while (Date.now() < end && pids.some(alive)) await new Promise((r) => setTimeout(r, 250));
   return pids.filter(alive);
 }
-const profiles = () => new Set(readdirSync(os.tmpdir()).filter((n) => n.startsWith('gpu-browser-')));
+const profiles = () => new Set(readdirSync(os.tmpdir()).filter((n) => n.startsWith('hemuli-')));
 const before = { profiles: profiles() };
 
-const client = new Client({ name: 'gpu-browser-test', version: '1.0.0' });
-const transport = new StdioClientTransport({ command: process.execPath, args: [path.join(here, '..', 'bin', 'gpu-browser-mcp.mjs')], env: { ...process.env }, stderr: 'ignore' });
+const client = new Client({ name: 'hemuli-test', version: '1.0.0' });
+const transport = new StdioClientTransport({ command: process.execPath, args: [path.join(here, '..', 'bin', 'hemuli-mcp.mjs')], env: { ...process.env }, stderr: 'ignore' });
 await client.connect(transport);
 
 const call = async (name, args = {}) => {
@@ -168,8 +168,8 @@ await step('client disconnect cleans up everything', async () => {
 // The server killed outright (SIGKILL, or TerminateProcess on Windows): no exit handlers run,
 // so the reaper must kill the browsers and delete their profiles.
 await step('hard-killed server leaves no browsers (reaper)', async () => {
-  const c2 = new Client({ name: 'gpu-browser-kill-test', version: '1.0.0' });
-  const t2 = new StdioClientTransport({ command: process.execPath, args: [path.join(here, '..', 'bin', 'gpu-browser-mcp.mjs')], env: { ...process.env }, stderr: 'ignore' });
+  const c2 = new Client({ name: 'hemuli-kill-test', version: '1.0.0' });
+  const t2 = new StdioClientTransport({ command: process.execPath, args: [path.join(here, '..', 'bin', 'hemuli-mcp.mjs')], env: { ...process.env }, stderr: 'ignore' });
   await c2.connect(t2);
   const before2 = profiles();
   for (const p of ['blank.html', 'hang.html']) {
