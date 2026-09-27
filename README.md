@@ -1,5 +1,9 @@
 # hemuli
 
+[![npm](https://img.shields.io/npm/v/hemuli)](https://www.npmjs.com/package/hemuli) [![test](https://github.com/DougLilliequist/hemuli/actions/workflows/test.yml/badge.svg)](https://github.com/DougLilliequist/hemuli/actions/workflows/test.yml)
+
+**npm:** [npmjs.com/package/hemuli](https://www.npmjs.com/package/hemuli) · `npm install -g hemuli`
+
 A lean, throwaway headless Chromium for **coding agents** to run, debug and validate **WebGPU / WebGL** builds, on the real GPU.
 
 Launching full Chrome for every check is heavy, and several agents testing in parallel make it worse. hemuli gives each check its own small, isolated browser (about 65 MB for a simple scene). It loads the build, catches everything that went wrong (WGSL and GLSL errors, WebGPU validation errors, exceptions, 404s, blank frames) and reports back in JSON that an agent can act on.
