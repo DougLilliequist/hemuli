@@ -12,8 +12,9 @@ const HELP = `gpu-browser [target] [options]
 gpu-browser setup [--engine chrome]    download the browser now (otherwise done on first run)
 gpu-browser setup-claude               register the MCP server + skill with Claude Code
 
-Launches a throwaway headless Chromium (real GPU: WebGPU on Metal, WebGL via ANGLE/Metal),
-loads the target, collects errors, prints a JSON report to stdout, and exits.
+Launches a throwaway headless Chromium on the real GPU (Metal on macOS, D3D12/D3D11 on
+Windows, Vulkan on Linux), loads the target, collects errors, prints a JSON report to
+stdout, and exits.
 
 target      URL (http://..., https://...), a directory (served; opens index.html),
             or an .html file (its directory is served). Omit to just report GPU info.
