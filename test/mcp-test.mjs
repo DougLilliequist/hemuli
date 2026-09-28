@@ -24,6 +24,13 @@ function childPids(pid) {
     return out.toString().split(/\r?\n/).map((x) => Number(x.trim())).filter(Boolean);
   } catch { return []; }
 }
+// A browser's helpers (GPU, renderers, utility) are not children of the server, but on POSIX they
+// share the browser's process group. Windows is covered by taskkill /T.
+function withHelpers(pids) {
+  if (process.platform === 'win32') return pids;
+  const group = (p) => execSync(`pgrep -g ${p} || true`).toString().split('\n').map(Number).filter(Boolean);
+  return [...new Set([...pids, ...pids.flatMap(group)])];
+}
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 async function waitGone(pids, ms = 15000) {
   const end = Date.now() + ms;
@@ -134,10 +141,12 @@ await step('reload clears state', async () => {
   assert.equal(rl.json.ok, true);
   if (api) assert.deepEqual(rl.json.app.contexts, [api]);
 });
-let sid2;
+let sid2, sid2Procs = [];
 await step('parallel second session + gpu_info + list', async () => {
+  const pre = new Set(childPids(transport.pid));
   const r = await call('open', { target: page('hang.html'), wait: ['300'] });
   sid2 = r.json.session;
+  sid2Procs = withHelpers(childPids(transport.pid).filter((p) => !pre.has(p)));
   assert.notEqual(sid2, sid);
   const info = await call('gpu_info', { session: sid });
   assert.equal(info.json.engine, caps.engine);
@@ -152,10 +161,12 @@ await step('hung page: eval times out, logs flag it, close works', async () => {
   assert.ok(l.json.failures.some((f) => f.startsWith('page-unresponsive')));
   assert.equal((await call('close', { session: sid2 })).json.closed, true);
   assert.equal((await call('logs', { session: sid2 })).isError, true);
+  assert.ok(sid2Procs.length >= 1, 'found the second session\'s browser');
+  assert.deepEqual(await waitGone(sid2Procs), [], 'browser and its helper processes gone');
 });
 
 // Leave sid open: closing the client must tear it down.
-const ours = childPids(transport.pid).filter((p) => p !== transport.pid);
+const ours = withHelpers(childPids(transport.pid).filter((p) => p !== transport.pid));
 await client.close();
 await step('client disconnect cleans up everything', async () => {
   assert.ok(ours.length >= 1, 'found the open session\'s browser');
@@ -176,9 +187,10 @@ await step('hard-killed server leaves no browsers (reaper)', async () => {
     const r = await c2.callTool({ name: 'open', arguments: { target: page(p), wait: [] } });
     assert.ok(!r.isError, r.content[0].text);
   }
-  const browsers = childPids(t2.pid).filter((p) => p !== t2.pid);
+  const main = childPids(t2.pid).filter((p) => p !== t2.pid);
   const created = [...profiles()].filter((p) => !before2.has(p));
-  assert.ok(browsers.length >= 2, `expected 2 browsers, found ${browsers.length}`);
+  assert.ok(main.length >= 2, `expected 2 browsers, found ${main.length}`);
+  const browsers = withHelpers(main);
   process.kill(t2.pid, 'SIGKILL');
   assert.deepEqual(await waitGone(browsers), [], 'browsers killed');
   const end = Date.now() + 10000;

@@ -18,8 +18,10 @@ const core = () => (corePromise ??= import('../lib/core.mjs'));
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PKG = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
-const MAX_SESSIONS = Number(process.env.HEMULI_MAX_SESSIONS) || 8;
-const IDLE_MS = (Number(process.env.HEMULI_IDLE_MINUTES) || 15) * 60_000;
+// Every Claude Code window runs its own server, and a session on a real WebGPU scene holds far more
+// than a blank page (GPU memory is system RAM on Apple Silicon), so keep few and drop them quickly.
+const MAX_SESSIONS = Number(process.env.HEMULI_MAX_SESSIONS) || 3;
+const IDLE_MS = (Number(process.env.HEMULI_IDLE_MINUTES) || 5) * 60_000;
 const DEFAULT_TIMEOUT = 30_000;
 
 const WAIT_SPECS = '"<ms>" sleep · "idle" network idle · "frames:<n>" rAF ticks · "selector:<css>" element exists · ' +
@@ -42,8 +44,7 @@ function get(id) {
   const entry = sessions.get(id);
   if (!entry) throw new Error(`No session "${id}". Open one with the open tool (live: ${[...sessions.keys()].join(', ') || 'none'}).`);
   if (entry.session.crashed) {
-    sessions.delete(id);
-    entry.session.close();
+    closeEntry(id);
     throw new Error(`Session "${id}" crashed (browser disconnected) and was removed. Open a new one.`);
   }
   entry.lastUsed = Date.now();
@@ -155,7 +156,8 @@ const server = new McpServer(
     instructions:
       'Interactive headless Chromium with a real GPU (WebGPU on Metal, WebGL via ANGLE) for debugging WebGPU/WebGL builds. ' +
       'Workflow: open (returns a session id and the load status) → logs / eval / screenshot / input / wait / fps → reload after rebuilding → close. ' +
-      'Sessions are isolated browsers (~65 MB each), closed automatically after ' + IDLE_MS / 60000 + ' idle minutes. ' +
+      'Each session is its own browser: ~65 MB blank, often hundreds of MB with a real scene. Reuse one session (reload after rebuilding, navigate for another target) ' +
+      'instead of opening new ones, and close it when done. At most ' + MAX_SESSIONS + ' at once; idle ones close after ' + IDLE_MS / 60000 + ' minutes. ' +
       'For a one-shot pass/fail check, the `hemuli` CLI via Bash is simpler.',
   },
 );
@@ -163,7 +165,7 @@ const server = new McpServer(
 server.registerTool('open', {
   title: 'Open session',
   description:
-    'Launch a new isolated browser session and load a target. Returns the session id, the load status (failures, console, page/GPU errors) and what the app requested from the GPU. ' +
+    'Launch a new isolated browser session and load a target. To load another build or page, use navigate or reload on an existing session instead of opening another. Returns the session id, the load status (failures, console, page/GPU errors) and what the app requested from the GPU. ' +
     'target: http(s) URL, a build directory (served on localhost; opens index.html) or an .html file (its directory is served; append ?query if needed). Omit for a blank secure page. ' +
     `wait: steps run in order after load (default ["1000"]): ${WAIT_SPECS}. ` +
     'For one-shot validation with no follow-up, the hemuli CLI is cheaper.',
@@ -181,18 +183,21 @@ server.registerTool('open', {
     timeout_ms: z.number().int().positive().optional().describe('Per-step timeout, default 30000'),
   },
 }, tool(async (a) => {
+  const { Session } = await core();
+  // No await between this check and sessions.set below, so parallel opens can't overshoot the limit.
   if (sessions.size >= MAX_SESSIONS)
     throw new Error(`Session limit (${MAX_SESSIONS}) reached. Close one first: ${[...sessions.keys()].join(', ')}`);
-  const { Session } = await core();
   const s = new Session({ width: a.width, height: a.height, dpr: a.dpr, coi: a.coi, ignore: a.ignore, flags: a.flags, engine: a.engine, protocolTimeout: 90_000 });
   const id = `s${nextId++}`;
   const entry = { id, session: s, lastUsed: Date.now() };
   resetCursors(entry);
+  // Registered before launching: it counts toward the limit, shutdown closes it, and closing the
+  // last other session can't stop the reaper while this browser is starting.
+  sessions.set(id, entry);
   try {
     await s.start();
     (reaper ??= startReaper()).add(s.browser.process()?.pid, s.profileDir);
     const url = s.resolve(a.target, a.root);
-    sessions.set(id, entry);
     s.onNavigate = () => { entry.gpuSeen = new Map(); };
     const out = await load(entry, url, a.wait ?? (a.target ? ['1000'] : []), a.timeout_ms ?? DEFAULT_TIMEOUT);
     const { warnings } = await s.gpuCheck(10_000).catch(() => ({ warnings: [] }));
@@ -200,8 +205,7 @@ server.registerTool('open', {
     out.engine = s.engine;
     return text(out);
   } catch (e) {
-    sessions.delete(id);
-    await s.close();
+    await closeEntry(id);
     throw e;
   }
 }));
