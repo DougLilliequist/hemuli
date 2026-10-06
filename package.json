@@ -1,6 +1,6 @@
 {
   "name": "hemuli",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Lean headless Chromium for agents to run, debug and validate WebGPU / WebGL builds",
   "type": "module",
   "license": "MIT",
