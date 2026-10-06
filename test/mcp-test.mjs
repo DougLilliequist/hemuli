@@ -17,18 +17,33 @@ const lenient = !!(process.env.CI || process.env.HEMULI_TEST_LENIENT);
 // Only processes this test started are checked: the session hosts are children of the server
 // under test and the browsers are theirs. (Other hemuli users on the machine, e.g. a live Claude
 // Code session, are ignored.)
-function childPids(pid) {
+// One snapshot of every process: [{ pid, ppid, name }]. (PowerShell takes about a second per
+// call, so walking a tree with one call per process is too slow on Windows.)
+function processTable() {
   try {
-    const out = process.platform === 'win32'
-      ? execSync(`powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter 'ParentProcessId=${pid}' | Select-Object -ExpandProperty ProcessId"`)
-      : execSync(`pgrep -P ${pid} || true`);
-    return out.toString().split(/\r?\n/).map((x) => Number(x.trim())).filter(Boolean);
+    if (process.platform === 'win32') {
+      const csv = execSync('powershell -NoProfile -Command "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name | ConvertTo-Csv -NoTypeInformation"').toString();
+      return csv.split(/\r?\n/).slice(1).map((l) => l.match(/^"(\d+)","(\d+)","(.*)"$/)).filter(Boolean)
+        .map(([, pid, ppid, name]) => ({ pid: +pid, ppid: +ppid, name }));
+    }
+    return execSync('ps -A -o pid=,ppid=,comm=').toString().split('\n').map((l) => l.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)).filter(Boolean)
+      .map(([, pid, ppid, name]) => ({ pid: +pid, ppid: +ppid, name }));
   } catch { return []; }
 }
 function descendants(pid) {
+  const table = processTable();
   const out = [];
-  for (let todo = childPids(pid); todo.length;) { const p = todo.pop(); out.push(p); todo.push(...childPids(p)); }
+  for (let todo = [pid]; todo.length;) {
+    const p = todo.pop();
+    for (const c of table) if (c.ppid === p && !out.includes(c.pid)) { out.push(c.pid); todo.push(c.pid); }
+  }
   return out;
+}
+/** Leftover pids with their names and parents, so a failure says what was left behind. */
+function describe(pids) {
+  if (!pids.length) return [];
+  const table = processTable();
+  return pids.map((pid) => { const p = table.find((x) => x.pid === pid); return p ? `${pid} ${p.name} (parent ${p.ppid})` : `${pid}`; });
 }
 // A browser's helpers (GPU, renderers, utility) are not its children, but on POSIX they share the
 // browser's process group. Windows is covered by taskkill /T.
@@ -173,7 +188,7 @@ await step('hung page: eval times out, logs flag it, close works', async () => {
   assert.equal((await call('close', { session: sid2 })).json.closed, true);
   assert.equal((await call('logs', { session: sid2 })).isError, true);
   assert.ok(sid2Procs.length >= 2, 'found the second session\'s host and browser');
-  assert.deepEqual(await waitGone(sid2Procs), [], 'host, browser and its helper processes gone');
+  assert.deepEqual(describe(await waitGone(sid2Procs)), [], 'host, browser and its helper processes gone');
 });
 
 // Leave sid open: closing the client must tear it down.
@@ -181,7 +196,7 @@ const ours = withHelpers(descendants(transport.pid));
 await client.close();
 await step('client disconnect cleans up everything', async () => {
   assert.ok(ours.length >= 1, 'found the open session\'s browser');
-  assert.deepEqual(await waitGone(ours), [], 'no browser processes left');
+  assert.deepEqual(describe(await waitGone(ours)), [], 'no browser processes left');
   const end = Date.now() + 10000;
   while (Date.now() < end && [...profiles()].some((p) => !before.profiles.has(p))) await new Promise((r) => setTimeout(r, 250));
   assert.deepEqual([...profiles()].filter((p) => !before.profiles.has(p)), [], 'no temp profiles left');
@@ -201,7 +216,7 @@ await step('hard-killed server leaves no browsers (hosts + reaper)', async () =>
   assert.ok(main.length >= 4, `expected 2 hosts and 2 browsers, found ${main.length} processes`);
   const browsers = withHelpers(main);
   process.kill(t2.pid, 'SIGKILL');
-  assert.deepEqual(await waitGone(browsers), [], 'browsers killed');
+  assert.deepEqual(describe(await waitGone(browsers)), [], 'browsers killed');
   const end = Date.now() + 10000;
   while (Date.now() < end && created.some((p) => profiles().has(p))) await new Promise((r) => setTimeout(r, 250));
   assert.deepEqual(created.filter((p) => profiles().has(p)), [], 'profiles deleted');
@@ -212,11 +227,13 @@ await step('idle session closes with its host; a busy one does not', async () =>
   try {
     const r = await call('open', { target: page('blank.html'), wait: [] }, c3);
     assert.equal(r.isError, false, JSON.stringify(r.json));
+    // Started first: finding the processes can take longer than the idle time on Windows.
+    const waiting = call('wait', { session: r.json.session, spec: '7000' }, c3);
     const procs = withHelpers(descendants(t3.pid));
     assert.ok(procs.length >= 2, 'found the host and its browser');
-    const w = await call('wait', { session: r.json.session, spec: '7000' }, c3);
+    const w = await waiting;
     assert.equal(w.isError, false, `busy session was closed: ${JSON.stringify(w.json)}`);
-    assert.deepEqual(await waitGone(procs, 15000), [], 'host and browser gone after idle');
+    assert.deepEqual(describe(await waitGone(procs, 15000)), [], 'host and browser gone after idle');
     assert.deepEqual((await call('list_sessions', {}, c3)).json, []);
     const late = await call('logs', { session: r.json.session }, c3);
     assert.equal(late.isError, true);
