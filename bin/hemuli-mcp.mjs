@@ -6,80 +6,111 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { startReaper } from '../lib/reaper.mjs';
+import { spawnHost } from '../lib/session-host.mjs';
+import { killTree } from '../lib/kill-tree.mjs';
 
-// core.mjs pulls in puppeteer (~25 MB); every Claude session runs one of these servers, most never
-// open a browser, so it is loaded on the first tool call that needs one.
-let corePromise;
-const core = () => (corePromise ??= import('../lib/core.mjs'));
+// The server never loads puppeteer: every Claude Code session runs one of these, so it stays under
+// 40 MB. Each browser lives in its own host process (lib/session-host.mjs) that exits with it.
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PKG = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 // Every Claude Code window runs its own server, and a session on a real WebGPU scene holds far more
 // than a blank page (GPU memory is system RAM on Apple Silicon), so keep few and drop them quickly.
 const MAX_SESSIONS = Number(process.env.HEMULI_MAX_SESSIONS) || 3;
-const IDLE_MS = (Number(process.env.HEMULI_IDLE_MINUTES) || 5) * 60_000;
+const IDLE_MS = Number(process.env.HEMULI_IDLE_SECONDS) * 1000 || Number(process.env.HEMULI_IDLE_MINUTES) * 60_000 || 30_000;
+const IDLE_TEXT = IDLE_MS % 60_000 ? `${IDLE_MS / 1000} s` : `${IDLE_MS / 60_000} min`;
+// A call still running after this long counts as stuck, and its session is closed anyway.
+const STUCK_MS = Math.max(IDLE_MS, 10 * 60_000);
 const DEFAULT_TIMEOUT = 30_000;
 
 const WAIT_SPECS = '"<ms>" sleep · "idle" network idle · "frames:<n>" rAF ticks · "selector:<css>" element exists · ' +
   '"js:<expr>" expression truthy · "console:<regex>" console message matches';
 
 // ---------- session registry ----------
-const sessions = new Map(); // id -> { session, lastUsed, gpuSeen: Map<key,count>, cursor }
+const sessions = new Map(); // id -> { id, host, lastUsed, busy, crashed }
+const closedWhy = new Map(); // recently closed id -> reason, for a clearer error on a late call
 // If this server is killed outright (Claude Code exiting, TerminateProcess on Windows), no exit
-// handler runs; the reaper then kills the browsers and deletes their profiles. It is a second node
-// process (~13 MB), so it only runs while sessions exist.
+// handler runs. The hosts notice the closed IPC channel and close their browsers; the reaper also
+// kills the browsers and deletes their profiles. It is one more node process (~13 MB), so it only
+// runs while sessions exist.
 let reaper;
 let nextId = 1;
 
-function resetCursors(entry) {
-  entry.cursor = { console: 0, pageErrors: 0, httpErrors: 0, requestsFailed: 0 };
-  entry.gpuSeen = new Map();
-}
-
 function get(id) {
   const entry = sessions.get(id);
-  if (!entry) throw new Error(`No session "${id}". Open one with the open tool (live: ${[...sessions.keys()].join(', ') || 'none'}).`);
-  if (entry.session.crashed) {
-    closeEntry(id);
+  if (!entry) {
+    const why = closedWhy.get(id);
+    if (why) throw new Error(`Session "${id}" was closed (${why}). Open a new one.`);
+    throw new Error(`No session "${id}". Open one with the open tool (live: ${[...sessions.keys()].join(', ') || 'none'}).`);
+  }
+  if (entry.crashed) {
+    closeEntry(id, 'browser crashed');
     throw new Error(`Session "${id}" crashed (browser disconnected) and was removed. Open a new one.`);
   }
-  entry.lastUsed = Date.now();
   return entry;
 }
 
-async function closeEntry(id) {
+/** Run an op in the session's host. A session with a call in flight is never idle. */
+async function run(entry, op, args) {
+  entry.busy++;
+  entry.lastUsed = Date.now();
+  try { return await entry.host.call(op, args); }
+  finally { entry.busy--; entry.lastUsed = Date.now(); }
+}
+const call = (id, op, args) => run(get(id), op, args);
+
+/**
+ * Kill a host, its browser and delete the profile. Normally the host already did this; it covers a
+ * host that was SIGKILLed or crashed (the browser is detached, so it would outlive the host).
+ */
+function cleanupSync(host) {
+  const alive = !host.exited;
+  if (alive) { try { host.child.kill('SIGKILL'); } catch {} }
+  // On Windows the tree is only reachable through a live parent, and PIDs are reused quickly.
+  if (host.browserPid && (alive || process.platform !== 'win32')) killTree(host.browserPid);
+  if (host.profileDir && existsSync(host.profileDir)) { try { rmSync(host.profileDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch {} }
+}
+
+async function closeEntry(id, why = 'closed') {
   const entry = sessions.get(id);
   if (!entry) return false;
   sessions.delete(id);
-  const pid = entry.session.browser?.process()?.pid;
-  await entry.session.close();
-  reaper?.remove(pid);
+  closedWhy.set(id, why);
+  if (closedWhy.size > 50) closedWhy.delete(closedWhy.keys().next().value);
+  await entry.host.close();
+  cleanupSync(entry.host);
+  reaper?.remove(entry.host.browserPid);
   if (!sessions.size && reaper) { reaper.stop(); reaper = null; }
   return true;
 }
 
 const idleTimer = setInterval(() => {
-  for (const [id, e] of sessions) if (Date.now() - e.lastUsed > IDLE_MS) {
-    console.error(`[hemuli] closing idle session ${id}`);
-    closeEntry(id);
+  const now = Date.now();
+  for (const [id, e] of sessions) {
+    const idle = now - e.lastUsed;
+    if ((!e.busy && idle > IDLE_MS) || idle > STUCK_MS) {
+      const why = e.busy ? `a call was stuck for ${Math.round(idle / 1000)} s` : `idle for ${IDLE_TEXT}`;
+      console.error(`[hemuli] closing session ${id}: ${why}`);
+      closeEntry(id, why);
+    }
   }
-}, 30_000);
+}, Math.min(5_000, IDLE_MS));
 idleTimer.unref();
 
 let shuttingDown = false;
 async function shutdownAll(code) {
   if (shuttingDown) return;
   shuttingDown = true;
-  await Promise.all([...sessions.keys()].map(closeEntry));
+  await Promise.all([...sessions.keys()].map((id) => closeEntry(id, 'server shut down')));
   process.exit(code);
 }
 process.on('SIGINT', () => shutdownAll(0));
 process.on('SIGTERM', () => shutdownAll(0));
-process.on('exit', () => { for (const e of sessions.values()) e.session.closeSync(); });
+process.on('exit', () => { for (const e of sessions.values()) cleanupSync(e.host); });
 process.stdin.on('close', () => shutdownAll(0));
 
 // ---------- helpers ----------
@@ -89,66 +120,6 @@ const errorResult = (e) => ({ isError: true, content: [{ type: 'text', text: e?.
 /** Wrap a tool handler: errors become isError results instead of protocol failures. */
 const tool = (fn) => async (args) => { try { return await fn(args); } catch (e) { return errorResult(e); } };
 
-/** Everything new since the last call for this session, plus the full failure list for the current page load. */
-async function delta(entry, { includeApp = false } = {}) {
-  const s = entry.session;
-  const out = { session: entry.id, url: s.page.url(), failures: [] };
-  let gpuErrors = [];
-  try {
-    const state = await s.pageState(5_000);
-    if (state) {
-      gpuErrors = state.errors;
-      if (includeApp) out.app = state.app;
-    }
-  } catch (e) {
-    s.fail('page-unresponsive', e.message);
-  }
-  out.failures = s.failures(gpuErrors);
-  out.ok = out.failures.length === 0;
-
-  const fresh = {};
-  for (const k of Object.keys(entry.cursor)) {
-    const arr = s.log[k];
-    const items = arr.slice(entry.cursor[k]);
-    entry.cursor[k] = arr.length;
-    if (items.length) fresh[k] = items;
-  }
-  if (s.log.consoleDropped) fresh.consoleDropped = s.log.consoleDropped;
-  const newGpu = [];
-  for (const e of gpuErrors) {
-    const key = `${e.kind}|${e.message}`;
-    const n = e.count || 1;
-    const prev = entry.gpuSeen.get(key) || 0;
-    if (n > prev) { newGpu.push(prev ? { ...e, newOccurrences: n - prev } : e); entry.gpuSeen.set(key, n); }
-  }
-  if (newGpu.length) fresh.gpuErrors = newGpu;
-  out.new = fresh;
-  return out;
-}
-
-async function runWaits(s, waits, timeout) {
-  const done = [];
-  for (const spec of waits) {
-    const t = Date.now();
-    try { await s.wait(spec, timeout); done.push({ spec, ms: Date.now() - t }); }
-    catch (e) { done.push({ spec, error: e.message }); s.fail('wait', `${spec}: ${e.message}`); break; }
-  }
-  return done;
-}
-
-async function load(entry, url, waits, timeout, how = 'goto') {
-  resetCursors(entry);
-  const s = entry.session;
-  let navError;
-  try {
-    if (how === 'reload') await s.reload(timeout); else await s.goto(url, timeout);
-  } catch (e) { navError = e.message; s.fail('navigation', e.message); }
-  const waited = navError ? [] : await runWaits(s, waits, timeout);
-  const out = await delta(entry, { includeApp: true });
-  if (waited.length) out.waits = waited;
-  return out;
-}
-
 // ---------- server ----------
 const server = new McpServer(
   { name: 'hemuli', version: PKG.version },
@@ -157,7 +128,7 @@ const server = new McpServer(
       'Interactive headless Chromium with a real GPU (WebGPU on Metal, WebGL via ANGLE) for debugging WebGPU/WebGL builds. ' +
       'Workflow: open (returns a session id and the load status) → logs / eval / screenshot / input / wait / fps → reload after rebuilding → close. ' +
       'Each session is its own browser: ~65 MB blank, often hundreds of MB with a real scene. Reuse one session (reload after rebuilding, navigate for another target) ' +
-      'instead of opening new ones, and close it when done. At most ' + MAX_SESSIONS + ' at once; idle ones close after ' + IDLE_MS / 60000 + ' minutes. ' +
+      'instead of opening new ones, and close it when done. At most ' + MAX_SESSIONS + ' at once; idle ones close after ' + IDLE_TEXT + ', so open a new one if a rebuild took longer. ' +
       'For a one-shot pass/fail check, the `hemuli` CLI via Bash is simpler.',
   },
 );
@@ -183,29 +154,24 @@ server.registerTool('open', {
     timeout_ms: z.number().int().positive().optional().describe('Per-step timeout, default 30000'),
   },
 }, tool(async (a) => {
-  const { Session } = await core();
   // No await between this check and sessions.set below, so parallel opens can't overshoot the limit.
   if (sessions.size >= MAX_SESSIONS)
     throw new Error(`Session limit (${MAX_SESSIONS}) reached. Close one first: ${[...sessions.keys()].join(', ')}`);
-  const s = new Session({ width: a.width, height: a.height, dpr: a.dpr, coi: a.coi, ignore: a.ignore, flags: a.flags, engine: a.engine, protocolTimeout: 90_000 });
   const id = `s${nextId++}`;
-  const entry = { id, session: s, lastUsed: Date.now() };
-  resetCursors(entry);
+  const host = spawnHost();
+  const entry = { id, host, lastUsed: Date.now(), busy: 0 };
   // Registered before launching: it counts toward the limit, shutdown closes it, and closing the
   // last other session can't stop the reaper while this browser is starting.
   sessions.set(id, entry);
+  host.on('started', (m) => (reaper ??= startReaper()).add(m.browserPid, m.profileDir));
+  host.on('crashed', () => { entry.crashed = true; });
+  // A host that dies on its own leaves its detached browser behind.
+  host.on('exit', () => { if (sessions.get(id) === entry) { entry.crashed = true; cleanupSync(host); } });
   try {
-    await s.start();
-    (reaper ??= startReaper()).add(s.browser.process()?.pid, s.profileDir);
-    const url = s.resolve(a.target, a.root);
-    s.onNavigate = () => { entry.gpuSeen = new Map(); };
-    const out = await load(entry, url, a.wait ?? (a.target ? ['1000'] : []), a.timeout_ms ?? DEFAULT_TIMEOUT);
-    const { warnings } = await s.gpuCheck(10_000).catch(() => ({ warnings: [] }));
-    if (warnings.length) out.warnings = warnings;
-    out.engine = s.engine;
-    return text(out);
+    const out = await run(entry, 'open', { ...a, wait: a.wait ?? (a.target ? ['1000'] : []), timeout_ms: a.timeout_ms ?? DEFAULT_TIMEOUT });
+    return text({ session: id, ...out });
   } catch (e) {
-    await closeEntry(id);
+    await closeEntry(id, 'open failed');
     throw e;
   }
 }));
@@ -220,11 +186,7 @@ server.registerTool('navigate', {
     wait: z.array(z.string()).optional().describe('Default ["1000"]'),
     timeout_ms: z.number().int().positive().optional(),
   },
-}, tool(async (a) => {
-  const entry = get(a.session);
-  const url = entry.session.resolve(a.target, a.root);
-  return text(await load(entry, url, a.wait ?? ['1000'], a.timeout_ms ?? DEFAULT_TIMEOUT));
-}));
+}, tool(async (a) => text({ session: a.session, ...await call(a.session, 'navigate', { ...a, wait: a.wait ?? ['1000'], timeout_ms: a.timeout_ms ?? DEFAULT_TIMEOUT }) })));
 
 server.registerTool('reload', {
   title: 'Reload',
@@ -234,10 +196,7 @@ server.registerTool('reload', {
     wait: z.array(z.string()).optional().describe('Default ["1000"]'),
     timeout_ms: z.number().int().positive().optional(),
   },
-}, tool(async (a) => {
-  const entry = get(a.session);
-  return text(await load(entry, null, a.wait ?? ['1000'], a.timeout_ms ?? DEFAULT_TIMEOUT, 'reload'));
-}));
+}, tool(async (a) => text({ session: a.session, ...await call(a.session, 'reload', { wait: a.wait ?? ['1000'], timeout_ms: a.timeout_ms ?? DEFAULT_TIMEOUT }) })));
 
 server.registerTool('logs', {
   title: 'Logs and errors',
@@ -246,7 +205,7 @@ server.registerTool('logs', {
     '(WGSL errors with line/col/source, WebGPU validation errors with counts, device lost, GLSL compile/link logs, pending gl.getError), HTTP errors. ' +
     '"failures" is always the full deduplicated list for the current page load; "ok" is true when it is empty. Also returns app info (contexts, requested features, canvases).',
   inputSchema: { session: z.string() },
-}, tool(async (a) => text(await delta(get(a.session), { includeApp: true }))));
+}, tool(async (a) => text({ session: a.session, ...await call(a.session, 'logs') })));
 
 server.registerTool('eval', {
   title: 'Evaluate JS',
@@ -258,10 +217,7 @@ server.registerTool('eval', {
     js: z.string(),
     timeout_ms: z.number().int().positive().optional(),
   },
-}, tool(async (a) => {
-  const { session } = get(a.session);
-  return text(await session.eval(a.js, a.timeout_ms ?? DEFAULT_TIMEOUT));
-}));
+}, tool(async (a) => text(await call(a.session, 'eval', { js: a.js, timeout_ms: a.timeout_ms ?? DEFAULT_TIMEOUT }))));
 
 server.registerTool('wait', {
   title: 'Wait',
@@ -271,12 +227,7 @@ server.registerTool('wait', {
     spec: z.string(),
     timeout_ms: z.number().int().positive().optional(),
   },
-}, tool(async (a) => {
-  const { session } = get(a.session);
-  const t = Date.now();
-  await session.wait(a.spec, a.timeout_ms ?? DEFAULT_TIMEOUT);
-  return text({ spec: a.spec, ms: Date.now() - t });
-}));
+}, tool(async (a) => text(await call(a.session, 'wait', { spec: a.spec, timeout_ms: a.timeout_ms ?? DEFAULT_TIMEOUT }))));
 
 server.registerTool('screenshot', {
   title: 'Screenshot',
@@ -291,8 +242,7 @@ server.registerTool('screenshot', {
     include_image: z.boolean().optional().describe('Default true; false returns only stats'),
   },
 }, tool(async (a) => {
-  const { session } = get(a.session);
-  const { base64, stats } = await session.screenshot({ selector: a.selector, samples: a.samples ?? [] });
+  const { base64, stats } = await call(a.session, 'screenshot', { selector: a.selector, samples: a.samples });
   if (a.save_path) {
     mkdirSync(path.dirname(path.resolve(a.save_path)), { recursive: true });
     writeFileSync(a.save_path, Buffer.from(base64, 'base64'));
@@ -322,54 +272,13 @@ server.registerTool('input', {
     'drag{x,y,to_x,to_y,steps,button} (e.g. orbit a camera), wheel{x,y,delta_x,delta_y} (zoom), key{key,ms} (press, optionally held), type{text}, pause{ms}. ' +
     'Follow with screenshot or logs to see the effect.',
   inputSchema: { session: z.string(), actions: z.array(Action).min(1) },
-}, tool(async (a) => {
-  const { session } = get(a.session);
-  const { withTimeout } = await core();
-  const { mouse, keyboard } = session.page;
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const run = async () => {
-    for (const act of a.actions) {
-      const button = act.button ?? 'left';
-      switch (act.type) {
-        case 'click': await mouse.click(act.x ?? 0, act.y ?? 0, { button }); break;
-        case 'move': await mouse.move(act.x ?? 0, act.y ?? 0, { steps: act.steps ?? 10 }); break;
-        case 'down': if (act.x !== undefined) await mouse.move(act.x, act.y ?? 0); await mouse.down({ button }); break;
-        case 'up': if (act.x !== undefined) await mouse.move(act.x, act.y ?? 0); await mouse.up({ button }); break;
-        case 'drag':
-          await mouse.move(act.x ?? 0, act.y ?? 0);
-          await mouse.down({ button });
-          await mouse.move(act.to_x ?? 0, act.to_y ?? 0, { steps: act.steps ?? 10 });
-          await mouse.up({ button });
-          break;
-        case 'wheel':
-          if (act.x !== undefined) await mouse.move(act.x, act.y ?? 0);
-          await mouse.wheel({ deltaX: act.delta_x ?? 0, deltaY: act.delta_y ?? 0 });
-          break;
-        case 'key': {
-          const parts = String(act.key).split('+');
-          const main = parts.pop();
-          for (const m of parts) await keyboard.down(m);
-          if (act.ms) { await keyboard.down(main); await sleep(act.ms); await keyboard.up(main); } else await keyboard.press(main);
-          for (const m of parts.reverse()) await keyboard.up(m);
-          break;
-        }
-        case 'type': await keyboard.type(act.text ?? ''); break;
-        case 'pause': await sleep(act.ms ?? 100); break;
-      }
-    }
-  };
-  await withTimeout(run(), DEFAULT_TIMEOUT, 'input');
-  return text({ done: a.actions.length });
-}));
+}, tool(async (a) => text(await call(a.session, 'input', { actions: a.actions, timeout_ms: DEFAULT_TIMEOUT }))));
 
 server.registerTool('fps', {
   title: 'Measure frame rate',
   description: 'Measure frames delivered over N seconds (p50/p95/max frame time) and the CPU time the app spends in its requestAnimationFrame callbacks. GPU execution time is not included.',
   inputSchema: { session: z.string(), seconds: z.number().positive().max(30).optional().describe('Default 2') },
-}, tool(async (a) => {
-  const { session } = get(a.session);
-  return text(await session.fps(a.seconds ?? 2));
-}));
+}, tool(async (a) => text(await call(a.session, 'fps', { seconds: a.seconds ?? 2 }))));
 
 server.registerTool('resize', {
   title: 'Resize viewport',
@@ -380,40 +289,37 @@ server.registerTool('resize', {
     height: z.number().int().positive(),
     dpr: z.number().positive().optional(),
   },
-}, tool(async (a) => {
-  const { session } = get(a.session);
-  await session.resize(a.width, a.height, a.dpr);
-  return text({ width: a.width, height: a.height, dpr: session.dpr });
-}));
+}, tool(async (a) => text(await call(a.session, 'resize', { width: a.width, height: a.height, dpr: a.dpr }))));
 
 server.registerTool('gpu_info', {
   title: 'GPU info',
   description: 'WebGPU adapter (vendor, architecture, fallback?), preferred canvas format, feature count, WebGL/WebGL2 renderer. full=true adds the feature list, limits and WebGL extensions. Uses the given session, or a temporary browser if none.',
   inputSchema: { session: z.string().optional(), full: z.boolean().optional() },
 }, tool(async (a) => {
-  const { Session, gpuWarnings } = await core();
-  const report = async (s) => { const gpu = await s.gpuInfo(!!a.full); return text({ engine: s.engine, warnings: gpuWarnings(gpu, s.engine, s), ...gpu }); };
-  if (a.session) return report(get(a.session).session);
-  const s = new Session();
-  try { await s.start(); return await report(s); } finally { await s.close(); }
+  if (a.session) return text(await call(a.session, 'gpu_info', { full: a.full }));
+  // A temporary browser in a host of its own, which exits when done.
+  const host = spawnHost();
+  try { return text(await host.call('probe', { full: a.full })); } finally { await host.close(); cleanupSync(host); }
 }));
 
 server.registerTool('close', {
   title: 'Close session',
   description: 'Close a session: kills its browser and deletes its temp profile. Close sessions when done to free memory.',
   inputSchema: { session: z.string() },
-}, tool(async (a) => text({ closed: await closeEntry(a.session) })));
+}, tool(async (a) => text({ closed: await closeEntry(a.session, 'closed with the close tool') })));
 
 server.registerTool('list_sessions', {
   title: 'List sessions',
   description: 'List open sessions with their current URL, viewport and idle time.',
   inputSchema: {},
-}, tool(async () => text([...sessions.values()].map((e) => ({
-  session: e.id,
-  url: e.session.crashed ? '(crashed)' : e.session.page?.url(),
-  viewport: `${e.session.width}x${e.session.height}@${e.session.dpr}`,
-  idleSeconds: Math.round((Date.now() - e.lastUsed) / 1000),
+}, tool(async () => text(await Promise.all([...sessions.values()].map(async (e) => {
+  // Not through run(): listing must not count as use and keep sessions from closing.
+  const info = e.crashed ? { url: '(crashed)' } : await Promise.race([
+    e.host.call('info').catch(() => ({ url: '(unavailable)' })),
+    new Promise((r) => setTimeout(() => r({ url: '(not responding)' }), 2_000)),
+  ]);
+  return { session: e.id, ...info, idleSeconds: e.busy ? 0 : Math.round((Date.now() - e.lastUsed) / 1000) };
 })))));
 
 await server.connect(new StdioServerTransport());
-console.error(`[hemuli] MCP server ready (max ${MAX_SESSIONS} sessions, idle close after ${IDLE_MS / 60000} min)`);
+console.error(`[hemuli] MCP server ready (max ${MAX_SESSIONS} sessions, idle close after ${IDLE_TEXT})`);

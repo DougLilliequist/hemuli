@@ -14,8 +14,9 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const page = (p) => path.join(here, 'pages', p);
 const lenient = !!(process.env.CI || process.env.HEMULI_TEST_LENIENT);
 
-// Only processes this test started are checked: the browsers are direct children of the server
-// under test. (Other hemuli users on the machine, e.g. a live Claude Code session, are ignored.)
+// Only processes this test started are checked: the session hosts are children of the server
+// under test and the browsers are theirs. (Other hemuli users on the machine, e.g. a live Claude
+// Code session, are ignored.)
 function childPids(pid) {
   try {
     const out = process.platform === 'win32'
@@ -24,8 +25,13 @@ function childPids(pid) {
     return out.toString().split(/\r?\n/).map((x) => Number(x.trim())).filter(Boolean);
   } catch { return []; }
 }
-// A browser's helpers (GPU, renderers, utility) are not children of the server, but on POSIX they
-// share the browser's process group. Windows is covered by taskkill /T.
+function descendants(pid) {
+  const out = [];
+  for (let todo = childPids(pid); todo.length;) { const p = todo.pop(); out.push(p); todo.push(...childPids(p)); }
+  return out;
+}
+// A browser's helpers (GPU, renderers, utility) are not its children, but on POSIX they share the
+// browser's process group. Windows is covered by taskkill /T.
 function withHelpers(pids) {
   if (process.platform === 'win32') return pids;
   const group = (p) => execSync(`pgrep -g ${p} || true`).toString().split('\n').map(Number).filter(Boolean);
@@ -40,12 +46,17 @@ async function waitGone(pids, ms = 15000) {
 const profiles = () => new Set(readdirSync(os.tmpdir()).filter((n) => n.startsWith('hemuli-')));
 const before = { profiles: profiles() };
 
-const client = new Client({ name: 'hemuli-test', version: '1.0.0' });
-const transport = new StdioClientTransport({ command: process.execPath, args: [path.join(here, '..', 'bin', 'hemuli-mcp.mjs')], env: { ...process.env }, stderr: 'ignore' });
-await client.connect(transport);
+const serverBin = path.join(here, '..', 'bin', 'hemuli-mcp.mjs');
+const connect = async (env = {}) => {
+  const c = new Client({ name: 'hemuli-test', version: '1.0.0' });
+  const t = new StdioClientTransport({ command: process.execPath, args: [serverBin], env: { ...process.env, ...env }, stderr: 'ignore' });
+  await c.connect(t);
+  return { c, t };
+};
+const { c: client, t: transport } = await connect();
 
-const call = async (name, args = {}) => {
-  const r = await client.callTool({ name, arguments: args });
+const call = async (name, args = {}, c = client) => {
+  const r = await c.callTool({ name, arguments: args });
   const txt = r.content.find((c) => c.type === 'text')?.text;
   let json; try { json = JSON.parse(txt); } catch { json = txt; }
   return { isError: !!r.isError, json, content: r.content };
@@ -143,10 +154,10 @@ await step('reload clears state', async () => {
 });
 let sid2, sid2Procs = [];
 await step('parallel second session + gpu_info + list', async () => {
-  const pre = new Set(childPids(transport.pid));
+  const pre = new Set(descendants(transport.pid));
   const r = await call('open', { target: page('hang.html'), wait: ['300'] });
   sid2 = r.json.session;
-  sid2Procs = withHelpers(childPids(transport.pid).filter((p) => !pre.has(p)));
+  sid2Procs = withHelpers(descendants(transport.pid).filter((p) => !pre.has(p)));
   assert.notEqual(sid2, sid);
   const info = await call('gpu_info', { session: sid });
   assert.equal(info.json.engine, caps.engine);
@@ -161,12 +172,12 @@ await step('hung page: eval times out, logs flag it, close works', async () => {
   assert.ok(l.json.failures.some((f) => f.startsWith('page-unresponsive')));
   assert.equal((await call('close', { session: sid2 })).json.closed, true);
   assert.equal((await call('logs', { session: sid2 })).isError, true);
-  assert.ok(sid2Procs.length >= 1, 'found the second session\'s browser');
-  assert.deepEqual(await waitGone(sid2Procs), [], 'browser and its helper processes gone');
+  assert.ok(sid2Procs.length >= 2, 'found the second session\'s host and browser');
+  assert.deepEqual(await waitGone(sid2Procs), [], 'host, browser and its helper processes gone');
 });
 
 // Leave sid open: closing the client must tear it down.
-const ours = withHelpers(childPids(transport.pid).filter((p) => p !== transport.pid));
+const ours = withHelpers(descendants(transport.pid));
 await client.close();
 await step('client disconnect cleans up everything', async () => {
   assert.ok(ours.length >= 1, 'found the open session\'s browser');
@@ -178,23 +189,38 @@ await step('client disconnect cleans up everything', async () => {
 
 // The server killed outright (SIGKILL, or TerminateProcess on Windows): no exit handlers run,
 // so the reaper must kill the browsers and delete their profiles.
-await step('hard-killed server leaves no browsers (reaper)', async () => {
-  const c2 = new Client({ name: 'hemuli-kill-test', version: '1.0.0' });
-  const t2 = new StdioClientTransport({ command: process.execPath, args: [path.join(here, '..', 'bin', 'hemuli-mcp.mjs')], env: { ...process.env }, stderr: 'ignore' });
-  await c2.connect(t2);
+await step('hard-killed server leaves no browsers (hosts + reaper)', async () => {
+  const { c: c2, t: t2 } = await connect();
   const before2 = profiles();
   for (const p of ['blank.html', 'hang.html']) {
     const r = await c2.callTool({ name: 'open', arguments: { target: page(p), wait: [] } });
     assert.ok(!r.isError, r.content[0].text);
   }
-  const main = childPids(t2.pid).filter((p) => p !== t2.pid);
+  const main = descendants(t2.pid);
   const created = [...profiles()].filter((p) => !before2.has(p));
-  assert.ok(main.length >= 2, `expected 2 browsers, found ${main.length}`);
+  assert.ok(main.length >= 4, `expected 2 hosts and 2 browsers, found ${main.length} processes`);
   const browsers = withHelpers(main);
   process.kill(t2.pid, 'SIGKILL');
   assert.deepEqual(await waitGone(browsers), [], 'browsers killed');
   const end = Date.now() + 10000;
   while (Date.now() < end && created.some((p) => profiles().has(p))) await new Promise((r) => setTimeout(r, 250));
   assert.deepEqual(created.filter((p) => profiles().has(p)), [], 'profiles deleted');
+});
+// Idle sessions close quickly, and their host processes go with them; a long call is not idle.
+await step('idle session closes with its host; a busy one does not', async () => {
+  const { c: c3, t: t3 } = await connect({ HEMULI_IDLE_SECONDS: '2' });
+  try {
+    const r = await call('open', { target: page('blank.html'), wait: [] }, c3);
+    assert.equal(r.isError, false, JSON.stringify(r.json));
+    const procs = withHelpers(descendants(t3.pid));
+    assert.ok(procs.length >= 2, 'found the host and its browser');
+    const w = await call('wait', { session: r.json.session, spec: '7000' }, c3);
+    assert.equal(w.isError, false, `busy session was closed: ${JSON.stringify(w.json)}`);
+    assert.deepEqual(await waitGone(procs, 15000), [], 'host and browser gone after idle');
+    assert.deepEqual((await call('list_sessions', {}, c3)).json, []);
+    const late = await call('logs', { session: r.json.session }, c3);
+    assert.equal(late.isError, true);
+    assert.match(late.json, /idle for 2 s/);
+  } finally { await c3.close(); }
 });
 process.exit(process.exitCode ?? 0);

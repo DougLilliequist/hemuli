@@ -283,9 +283,9 @@ close
 
 **Limits and cleanup:**
 - **Session count:** at most 3 open at once per server (`HEMULI_MAX_SESSIONS`). Every Claude Code window runs its own server, and a session on a real WebGPU scene can hold hundreds of MB (on Apple Silicon, GPU memory is system RAM), so reuse a session with `reload` / `navigate` rather than opening more.
-- **Idle sessions:** closed after 5 minutes (`HEMULI_IDLE_MINUTES`).
+- **Idle sessions:** closed after 30 seconds without a call (`HEMULI_IDLE_SECONDS`). A call still in progress, e.g. a long `wait`, keeps its session open. A call to a closed session says why it was closed; `open` a new one, e.g. after a rebuild that took longer than that.
 - **Time limit per call:** 30 s by default. On a frozen page, calls return a "timed out (page busy or hung?)" error, `logs` reports `page-unresponsive`, and `close` still works.
-- **Cleanup:** closing a session kills the browser's whole process tree (GPU and renderer helpers included) and deletes its profile. When the client disconnects, every session is closed. A small reaper process does the same if the server is killed outright (e.g. Claude Code exiting, or `TerminateProcess` on Windows), so no browsers are orphaned.
+- **Cleanup:** closing a session kills the browser's whole process tree (GPU and renderer helpers included) and deletes its profile. Each session's browser is driven by its own small node process, which exits with the session, so the server itself never loads puppeteer and stays under 40 MB however many sessions it has opened. When the client disconnects, every session is closed. If the server is killed outright, the session processes notice and close their browsers, and a small reaper process does the same as a second line (e.g. Claude Code exiting, or `TerminateProcess` on Windows), so no browsers are orphaned.
 
 ---
 
@@ -313,7 +313,7 @@ Choose per run with `--engine chrome` (CLI) or `engine: "chrome"` (MCP `open`), 
 | `HEMULI_EXECUTABLE` | Use this Chrome/Chromium binary instead of downloading one |
 | `HEMULI_EXTRA_FLAGS` | Space-separated Chromium switches added to every launch |
 | `HEMULI_MAX_SESSIONS` | MCP: max concurrent sessions per server (default 3) |
-| `HEMULI_IDLE_MINUTES` | MCP: close sessions idle this long (default 5) |
+| `HEMULI_IDLE_SECONDS` | MCP: close sessions idle this long (default 30). `HEMULI_IDLE_MINUTES` is still read when this is unset |
 
 ---
 
@@ -350,6 +350,7 @@ Choose per run with `--engine chrome` (CLI) or `engine: "chrome"` (MCP `open`), 
 | `lib/core.mjs` | `Session`: launches the browser, injects the instrumentation, serves local files, collects errors, and handles waits, evals, screenshots and fps |
 | `bin/hemuli.mjs` | The CLI: one `Session` per run, JSON report, exit code |
 | `bin/hemuli-mcp.mjs` | The MCP server: a registry of long-lived sessions, with the tools described above |
+| `lib/session-host.mjs` | One child process per MCP session: owns the browser and its logs, exits when the session closes |
 | `lib/reaper.mjs` | Detached watchdog that kills the MCP server's browsers if the server dies without cleaning up |
 | `lib/kill-tree.mjs` | Kills a browser with all its helper processes (its process group on macOS / Linux, `taskkill /T` on Windows) |
 | `lib/setup-claude.mjs` | `hemuli setup-claude` |

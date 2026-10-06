@@ -14,7 +14,7 @@ Exit codes: `0` ok · `1` problems found (see `failures`) · `2` bad usage or se
 - **One-shot check** ("does it load and render without errors?"): use the CLI below from Bash.
 - **Interactive debugging:** use the `hemuli` MCP tools (`mcp__hemuli__*`), for when you need to eval repeatedly, click, drag or scroll to move the camera, screenshot after each change, or `reload` after rebuilding. The flow is `open` → `logs` / `eval` / `input` / `screenshot` → `reload` → `close`.
   - `logs` returns only what's new since the last call, while `failures` always covers the whole current page load.
-  - Each session is a whole browser, often hundreds of MB with a real scene. Keep one session per task: `reload` after rebuilding and `navigate` to another page or build instead of opening a new one. Always `close` it when done. Idle sessions close after 5 minutes, and at most 3 can be open.
+  - Each session is a whole browser, often hundreds of MB with a real scene. Keep one session per task: `reload` after rebuilding and `navigate` to another page or build instead of opening a new one. Always `close` it when done. A session closes after 30 seconds without a call, and at most 3 can be open. If a call reports that the session was closed, for example after a long rebuild, `open` a new one.
 
 ## Common invocations (CLI)
 
