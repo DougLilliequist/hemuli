@@ -225,11 +225,13 @@ await step('hard-killed server leaves no browsers (hosts + reaper)', async () =>
 await step('idle session closes with its host; a busy one does not', async () => {
   const { c: c3, t: t3 } = await connect({ HEMULI_IDLE_SECONDS: '2' });
   try {
+    // The server's own processes (e.g. its conhost.exe on Windows) stay while it runs.
+    const pre = new Set(descendants(t3.pid));
     const r = await call('open', { target: page('blank.html'), wait: [] }, c3);
     assert.equal(r.isError, false, JSON.stringify(r.json));
     // Started first: finding the processes can take longer than the idle time on Windows.
     const waiting = call('wait', { session: r.json.session, spec: '7000' }, c3);
-    const procs = withHelpers(descendants(t3.pid));
+    const procs = withHelpers(descendants(t3.pid).filter((p) => !pre.has(p)));
     assert.ok(procs.length >= 2, 'found the host and its browser');
     const w = await waiting;
     assert.equal(w.isError, false, `busy session was closed: ${JSON.stringify(w.json)}`);
